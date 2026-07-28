@@ -171,3 +171,21 @@ Following D11, verified `ReplanningEngine.handle_gps_degraded()` (the simpler tr
 **Result: 5/5 PASS**, every trial, both stages, across 5 independent fresh-SITL trials. No timeouts, no hangs, no batch-vs-isolated discrepancy like D11's. Consistent with this trigger being architecturally simpler (no `pause_mission`/`clear_mission`/`upload_mission`/`start_mission` sequence, no PX4-internal mode-switch race to hit) -- the same class of bug that hit the reroute handoff has no equivalent surface here.
 
 **Not yet verified**: whether `set_current_speed()` actually reduces the vehicle's real flight speed by the expected fraction (the test only confirms the mission keeps progressing after the call, not the resulting velocity) -- a reasonable next check, not done tonight given the scope already covered. Also not yet verified: `resume_after_gps_recovery()` (calling `start_mission()` again after a HOLD to resume the original mission) -- untested, same category of "PX4 internal state transition" risk as D11's bug, flagged rather than assumed safe.
+
+---
+
+## D13 — Battery-critical response verified against live SITL: 5/5 both paths, clean
+
+Verified `ReplanningEngine.handle_battery_critical()` -- also a simple, non-terminal-mission-upload trigger (just `action.return_to_launch()` or `action.land()`), same measured-batch discipline.
+
+**Test**: takeoff, climb past 10m, then call `handle_battery_critical()` with a percentage chosen to trigger one specific path (15% for RTL, 5% for immediate land, against `BatteryResponseThresholds(rtl_below_percent=20, land_immediately_below_percent=8)`), then actively confirm (not just trust the call's return) that `FlightMode` actually reaches `RETURN_TO_LAUNCH` or `LAND` respectively within 15s.
+
+**Results**:
+- RTL path: **5/5 PASS**, `FlightMode` confirmed `RETURN_TO_LAUNCH` every trial.
+- Land path: **5/5 PASS**, `FlightMode` confirmed `LAND` every trial.
+
+10/10 across both paths, no timeouts, no hangs -- consistent with D12's finding that triggers without a mission pause/clear/upload/resume cycle don't hit the class of PX4-internal-state-transition race that D11's reroute handoff did.
+
+**Not yet verified**: that RTL actually completes (returns to the launch point and lands) rather than just entering the right flight mode -- the test window (15s) only confirms the mode switch, not the full return-and-land sequence, which would take substantially longer to observe. Reasonable next check, not done tonight given the scope already covered in one session.
+
+**Overnight verification summary** (D11+D12+D13): of the three trigger types, GPS-degraded and battery-critical are now measured-reliable (5/5 and 10/10 respectively). The no-fly-zone reroute (the core deliverable) has its root cause fixed and confirmed correct in isolation, but batch-measured reliability is still an open, unexplained problem (D11) -- this is the one piece that should not be treated as production-ready without further investigation.
