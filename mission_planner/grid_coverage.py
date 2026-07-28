@@ -11,24 +11,9 @@ import math
 
 from shapely.geometry import LineString, Polygon
 
+from mission_planner.geo import latlon_to_local_xy as _latlon_to_local_xy
+from mission_planner.geo import local_xy_to_latlon as _local_xy_to_latlon
 from mission_planner.waypoint import Mission, Waypoint, WaypointKind
-
-_EARTH_RADIUS_M = 6371000.0
-
-
-def _local_xy_to_latlon(x_m: float, y_m: float, origin_lat_deg: float, origin_lon_deg: float) -> tuple[float, float]:
-    """Equirectangular projection, accurate enough for survey-grid extents (<10km)."""
-    d_lat = (y_m / _EARTH_RADIUS_M) * (180.0 / math.pi)
-    d_lon = (x_m / (_EARTH_RADIUS_M * math.cos(math.radians(origin_lat_deg)))) * (180.0 / math.pi)
-    return origin_lat_deg + d_lat, origin_lon_deg + d_lon
-
-
-def _latlon_to_local_xy(lat_deg: float, lon_deg: float, origin_lat_deg: float, origin_lon_deg: float) -> tuple[float, float]:
-    d_lat = lat_deg - origin_lat_deg
-    d_lon = lon_deg - origin_lon_deg
-    y_m = d_lat * (math.pi / 180.0) * _EARTH_RADIUS_M
-    x_m = d_lon * (math.pi / 180.0) * _EARTH_RADIUS_M * math.cos(math.radians(origin_lat_deg))
-    return x_m, y_m
 
 
 def generate_lawnmower_mission(
