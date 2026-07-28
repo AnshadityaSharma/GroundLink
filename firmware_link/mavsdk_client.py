@@ -48,7 +48,7 @@ from collections.abc import AsyncIterator
 
 from mavsdk import System
 from mavsdk.action import ActionError
-from mavsdk.mission import MissionItem, MissionPlan
+from mavsdk.mission import MissionError, MissionItem, MissionPlan
 
 from firmware_link.telemetry import (
     Attitude,
@@ -169,8 +169,30 @@ class GroundLinkVehicle:
         plan = _mission_to_plan(mission)
         await self.drone.mission.upload_mission(plan)
 
-    async def start_mission(self) -> None:
-        await self.drone.mission.start_mission()
+    async def start_mission(self, retries: int = 5, retry_delay_s: float = 1.0) -> None:
+        """Retries on MissionError.
+
+        Found via a live-SITL replan-handoff trial that hung indefinitely,
+        then diagnosed with the SAME technique that cracked D10 -- reading
+        PX4's own .ulg log rather than guessing from MAVSDK-side symptoms:
+        immediately after upload_mission() on a replanned (mid-flight)
+        mission, the DO_SET_MODE command start_mission() sends to switch
+        back into MISSION mode came back with MAV_RESULT_TEMPORARILY_REJECTED
+        (vehicle_command_ack result=1) -- PX4 wasn't internally ready to
+        accept the mode change the instant the upload completed. Same class
+        of timing race as the arm-readiness issue (decisions.md D9), same
+        fix shape (retry with backoff, matching arm()'s pattern above)."""
+        last_error: MissionError | None = None
+        for attempt in range(retries):
+            try:
+                await self.drone.mission.start_mission()
+                return
+            except MissionError as e:
+                last_error = e
+                if attempt < retries - 1:
+                    await asyncio.sleep(retry_delay_s)
+        assert last_error is not None
+        raise last_error
 
     # -- Replanning handoff: pause -> confirm settled -> clear -> upload ->
     # resume. Every method below maps to a real, introspected MAVSDK method

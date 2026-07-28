@@ -46,12 +46,28 @@ def _rect_zone(x0, y0, x1, y1, label="zone") -> NoFlyZone:
 class FakeVehicle:
     """Hand-written stand-in for GroundLinkVehicle's async method surface.
     Records every call for assertion; streams are pre-scripted so
-    _wait_until_settled() can be driven deterministically in tests."""
+    _wait_until_settled() can be driven deterministically in tests.
 
-    def __init__(self, flight_modes=("HOLD",), ground_speeds=(0.0,)):
+    flight_mode_stream() is STATEFUL (tracks whether start_mission() has
+    been called yet) rather than replaying one fixed tuple to every
+    consumer -- a shared fixed tuple containing both "HOLD" and "MISSION"
+    values is fragile here because _wait_until_settled and
+    _wait_for_mission_mode both consume this stream, concurrently with a
+    second pumped stream, and asyncio's interleaving order between the two
+    background pump tasks isn't guaranteed; a naive replay can leak
+    "MISSION" into the settle-phase check depending on scheduling. Gating
+    on whether start_mission() has actually been called models reality
+    instead (the mode genuinely doesn't become MISSION until after that
+    call), and makes both entered_mission_mode and mission_mode_confirmed
+    controllable per-test.
+    """
+
+    def __init__(self, flight_modes=("HOLD",), ground_speeds=(0.0,), enters_mission_mode=True):
         self.calls: list[tuple[str, tuple]] = []
         self._flight_modes = flight_modes
         self._ground_speeds = ground_speeds
+        self._enters_mission_mode = enters_mission_mode
+        self._start_mission_calls = 0
 
     def _record(self, name, *args):
         self.calls.append((name, args))
@@ -79,11 +95,15 @@ class FakeVehicle:
 
     async def start_mission(self):
         self._record("start_mission")
+        self._start_mission_calls += 1
 
     async def resume_mission_from(self, index):
         self._record("resume_mission_from", index)
 
     async def flight_mode_stream(self):
+        if self._start_mission_calls > 0 and self._enters_mission_mode:
+            yield "MISSION"
+            return
         for mode in self._flight_modes:
             yield mode
 
@@ -114,9 +134,10 @@ async def test_no_fly_zone_noop_when_not_intersecting():
 
 @pytest.mark.asyncio
 async def test_no_fly_zone_triggers_full_handoff_when_blocking():
-    # settle after 3 consecutive HOLD+near-zero-speed samples (default
-    # required_consecutive=3), then one extra sample so the merged stream
-    # has enough entries to satisfy both mode and speed before the count
+    # settle after 2 consecutive HOLD+near-zero-speed samples, then
+    # start_mission() succeeds and flight_mode_stream() (stateful --
+    # gated on start_mission having been called, see FakeVehicle) reports
+    # MISSION immediately.
     vehicle = FakeVehicle(flight_modes=("HOLD", "HOLD", "HOLD", "HOLD"), ground_speeds=(0.0, 0.0, 0.0, 0.0))
     engine = ReplanningEngine(vehicle, EngineConfig(no_fly_zone_safety_margin_m=5.0, settle_required_consecutive=2))
     engine.set_active_mission(_make_mission([_waypoint(200, 0)]))
@@ -130,6 +151,28 @@ async def test_no_fly_zone_triggers_full_handoff_when_blocking():
 
     uploaded_mission = vehicle.calls[2][1][0]
     assert all(wp.kind == WaypointKind.NAV for wp in uploaded_mission.waypoints)
+
+
+@pytest.mark.asyncio
+async def test_handoff_raises_if_mission_mode_never_confirmed():
+    # Regression test for the real live-SITL bug found via .ulg analysis:
+    # MAVSDK's start_mission() can report success while PX4's internal
+    # mode-switch is rejected (MAV_RESULT_TEMPORARILY_REJECTED), leaving the
+    # vehicle stuck. _start_mission_and_confirm_resumed must not trust the
+    # call's return -- it actively polls flight_mode and retries. Here
+    # "MISSION" never appears at all, so it must eventually give up loudly
+    # (TimeoutError) rather than silently reporting a fake success.
+    vehicle = FakeVehicle(flight_modes=("HOLD", "HOLD", "HOLD", "HOLD"), ground_speeds=(0.0, 0.0, 0.0, 0.0), enters_mission_mode=False)
+    engine = ReplanningEngine(vehicle, EngineConfig(no_fly_zone_safety_margin_m=5.0, settle_required_consecutive=2))
+    engine.set_active_mission(_make_mission([_waypoint(200, 0)]))
+
+    zone = _rect_zone(80, -20, 120, 20)
+    with pytest.raises(TimeoutError):
+        await engine.handle_no_fly_zone(zone, _position(0, 0))
+
+    # start_mission should have been retried, not called just once
+    start_mission_calls = [c for c in vehicle.calls if c[0] == "start_mission"]
+    assert len(start_mission_calls) >= 2
 
 
 @pytest.mark.asyncio

@@ -5,14 +5,20 @@ This is the ONLY file in replanning_engine that imports firmware_link (and,
 transitively, touches MAVSDK) -- everything else in the package is pure
 Python (see DESIGN.md).
 
-STATUS: orchestration logic is unit-tested with a hand-written vehicle
-stand-in (see tests/test_engine.py), but the actual SEQUENCE of MAVSDK calls
--- especially clear_mission() immediately after upload, and whether
-start_mission() correctly resumes a mid-flight replan -- has NOT been run
-against live SITL yet. Every individual GroundLinkVehicle method it calls
-maps to a real, introspected MAVSDK method (see mavsdk_client.py), but their
-composition is new, untested territory. See decisions.md for the
-measured-pass-rate write-up once that verification happens.
+STATUS (see decisions.md D11 for the full account -- read it before trusting
+this): orchestration logic is unit-tested with a hand-written vehicle
+stand-in (tests/test_engine.py). Run against live SITL, a real bug was
+found and fixed (MAVSDK's start_mission() can report success while PX4's
+internal mode-switch is silently rejected -- _start_mission_and_confirm_
+resumed below now actively verifies and retries). That fix is confirmed
+correct by 2 clean isolated single-run tests (full reroute, real continuous
+flight, one reaching the final waypoint). It is NOT confirmed reliable: a
+5-trial scripted batch measurement of the identical script hit a SEPARATE,
+unexplained silent hang in every trial (not the diagnosed-and-fixed
+symptom, which now fails loudly within ~15s if it recurs). Treat this
+module as "root cause of one bug understood and fixed, overall reliability
+of the handoff still an open question" -- not as "verified," until that
+batch-vs-isolated discrepancy is diagnosed.
 """
 
 from __future__ import annotations
@@ -181,10 +187,42 @@ class ReplanningEngine:
 
         new_mission = Mission(waypoints=new_remaining_waypoints, name="replan")
         await self.vehicle.upload_mission(new_mission)
-        await self.vehicle.start_mission()
+        await self._start_mission_and_confirm_resumed()
 
         self.current_mission = new_mission
         self._current_index = 0
+
+    async def _start_mission_and_confirm_resumed(self, max_attempts: int = 5) -> None:
+        """Call start_mission() and ACTIVELY VERIFY the vehicle actually
+        enters MISSION mode, retrying the call if it doesn't.
+
+        Found via a live-SITL trial that hung indefinitely, diagnosed with
+        the same .ulg-log technique that cracked D10: MAVSDK's
+        start_mission() call itself reports success (it tracks the
+        MAV_CMD_MISSION_START ack), but PX4 internally follows that with its
+        own DO_SET_MODE attempt to actually switch into MISSION mode -- and
+        that second, internal step came back MAV_RESULT_TEMPORARILY_REJECTED
+        in the .ulg (vehicle_command_ack result=1), invisible to MAVSDK's
+        Python-level success/failure reporting. start_mission()'s own
+        retry-on-MissionError (mavsdk_client.py) doesn't help here because
+        no exception is ever raised -- the call looks like it succeeded.
+        So this polls the actual FlightMode telemetry after each attempt
+        instead of trusting the call's return."""
+        for attempt in range(max_attempts):
+            await self.vehicle.start_mission()
+            if await self._wait_for_mission_mode(timeout_s=3.0):
+                return
+        raise TimeoutError(f"Vehicle never entered MISSION mode after {max_attempts} start_mission() attempts")
+
+    async def _wait_for_mission_mode(self, timeout_s: float) -> bool:
+        try:
+            async with asyncio.timeout(timeout_s):
+                async for mode in self.vehicle.flight_mode_stream():
+                    if mode == "MISSION":
+                        return True
+        except TimeoutError:
+            pass
+        return False
 
     async def _wait_until_settled(self) -> None:
         """Block until flight_mode == HOLD and ground speed is near zero,
