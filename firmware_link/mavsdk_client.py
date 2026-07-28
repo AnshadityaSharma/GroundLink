@@ -226,6 +226,18 @@ class GroundLinkVehicle:
         """action.set_current_speed() -- ephemeral, not persisted on the vehicle."""
         await self.drone.action.set_current_speed(speed_m_s)
 
+    async def set_param_float(self, name: str, value: float) -> None:
+        """param.set_param_float() -- used by sim/failure_injection to inject
+        PX4 SITL fault parameters (e.g. SIM_BAT_MIN_PCT, SIM_GPS_USED).
+        SITL-only in intent (setting real hardware params this way would be
+        a very different risk profile), but the wrapper itself doesn't know
+        or enforce that -- it's a thin, real MAVSDK call like the others."""
+        await self.drone.param.set_param_float(name, value)
+
+    async def set_param_int(self, name: str, value: int) -> None:
+        """param.set_param_int() -- see set_param_float."""
+        await self.drone.param.set_param_int(name, value)
+
     async def resume_mission_from(self, index: int) -> None:
         """mission.set_current_mission_item() then start_mission(). Whether
         this is actually the right way to resume a mid-flight replan (vs.

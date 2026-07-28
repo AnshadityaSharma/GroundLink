@@ -28,6 +28,7 @@ include = [
     "constraint_monitor*",
     "replanning_engine*",
     "dashboard*",
+    "sim*",
 ]
 
 [tool.pytest.ini_options]
