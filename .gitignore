@@ -1,0 +1,21 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# PX4 source is cloned separately inside WSL (~/PX4-Autopilot), not vendored here
+PX4-Autopilot/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Logs / telemetry captures
+*.ulg
+*.log
+tests/fixtures/*.jsonl.local
+
+.DS_Store

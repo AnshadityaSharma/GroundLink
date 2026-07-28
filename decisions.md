@@ -1,0 +1,147 @@
+# GroundLink — Decisions Log
+
+Chronological log of architectural/technical decisions with rationale. Updated as decisions are made, not batched at the end.
+
+---
+
+## D1 — MAVSDK-Python over pymavlink
+
+**Decision**: Use MAVSDK-Python as the firmware integration library.
+
+**Rationale**:
+- Async/await API maps directly onto what this system needs to do concurrently: stream telemetry, run constraint checks, and (later) push replanned missions/offboard commands without blocking on each other. pymavlink is synchronous/callback-based and we'd end up rebuilding an async wrapper around it anyway.
+- Higher-level mission API (`mission.upload_mission`, `action.arm`, `telemetry.battery()`, `mission.set_current_mission_item`, offboard mode) removes a lot of raw MAVLink message-packing boilerplate that pymavlink requires by hand.
+- Maintained by the PX4 team, with PX4 SITL as the first-class reference target — matches our primary flight stack.
+- `context.md` already lists MAVSDK-Python as the preferred option.
+
+**Trade-off accepted**: MAVSDK's ArduPilot support is less mature than its PX4 support, and it's a heavier dependency (runs a local gRPC-backed `mavsdk_server` process under the hood) than pymavlink's single-file simplicity. Given PX4 is our primary flight stack, this is acceptable. If ArduPilot becomes a hard requirement later, pymavlink remains available as a fallback for that specific integration point — the firmware_link layer is structured so the MAVSDK client is the only thing that would need replacing (see D8).
+
+---
+
+## D2 — pyproject.toml over requirements.txt
+
+**Decision**: Use a single `pyproject.toml` (PEP 621) with an editable install, not a bare `requirements.txt`.
+
+**Rationale**: `mission_planner`, `firmware_link`, `constraint_monitor`, `replanning_engine`, and `dashboard` are separate top-level packages that need to import from each other (e.g. `replanning_engine` will consume `mission_planner` types, `dashboard` will consume everything). An editable install (`pip install -e .`) makes those imports work cleanly from anywhere in the tree and under pytest, without `sys.path` hacks or a `src/` layout workaround. A plain `requirements.txt` doesn't give us that — we'd need one anyway alongside manual path munging.
+
+**Trade-off accepted**: Slightly more setup ceremony than `pip install -r requirements.txt` for a first-time contributor. Documented step-by-step in README.md.
+
+---
+
+## D3 — Execution environment: WSL2 (Ubuntu 24.04), not Windows-native
+
+**Decision**: All Python tooling (venv, MAVSDK, PX4 build, Streamlit) runs inside WSL2 Ubuntu, not split between Windows-native and WSL-native tooling.
+
+**Rationale**: PX4 SITL's build toolchain (and Gazebo/jMAVSim) requires Linux. The dev machine is Windows 11. Rather than mock the flight controller on Windows (which `context.md` explicitly rules out) or split the stack across two OSes (fragile — path translation, networking edge cases, "works on my half" bugs), everything lives in one Linux environment: WSL2.
+
+**Verified before committing to this** (2026-07-28 environment audit): WSL2 2.7.3.0 / kernel 6.6.114.1-1 with WSLg 1.0.73 (GUI passthrough) already present and working on this machine; Ubuntu 24.04.1 LTS available; 954GB free disk, 16 cores, 15GB RAM. Confirmed — not assumed — that a server bound inside WSL2 is reachable from a normal Windows browser via `localhost:<port>` (default NAT networking with localhost forwarding, no `.wslconfig` override present), which is what makes the Streamlit dashboard viewable from Windows later without extra config.
+
+**Open flag**: PX4's official `ubuntu.sh` dependency script has historically been tested primarily against 20.04/22.04. Ubuntu 24.04 support exists in current PX4 releases but is newer territory — if it causes friction during the SITL build (Step 2), it'll be logged here rather than silently patched around.
+
+---
+
+## D4 — Project files on Windows filesystem, venv + PX4 clone native to WSL
+
+**Decision**: The GroundLink repo itself stays on the Windows filesystem (`C:\Users\Admin\Desktop\drones_project`, visible to WSL at `/mnt/c/Users/Admin/Desktop/drones_project`) so it's directly editable from Windows-side tools. The Python venv and the PX4-Autopilot clone are created inside WSL's native filesystem (`~/groundlink-venv`, `~/PX4-Autopilot`), not under `/mnt/c`.
+
+**Rationale**: Plain Python source edits over the `/mnt/c` DrvFs bridge are fine (small text files, no heavy I/O). But venvs (lots of small symlinked files) and especially a full PX4 build (thousands of compiled objects, incremental rebuilds) are known to be significantly slower and occasionally flaky over the 9P/DrvFs bridge. Keeping those two specifically on native WSL ext4 avoids that class of problem while keeping the actual project source in one canonical, Windows-editable location.
+
+---
+
+## D5 — pip bootstrap without sudo/ensurepip; mavsdk API verified by introspection, not memory
+
+**Context**: The WSL Ubuntu 24.04 environment has no passwordless sudo, and `ensurepip` isn't installed (Ubuntu splits it out of the base `python3` package). `python3 -m venv` alone can't provision `pip` here.
+
+**Decision**: Created the venv with `python3 -m venv --without-pip`, then bootstrapped pip via `https://bootstrap.pypa.io/get-pip.py` run inside the venv. This needs no root at all — pip installs entirely into the user-owned venv directory.
+
+**Consequence flagged for the user**: this sidesteps the *venv* blocker, but PX4's own build toolchain (`cmake`, `ninja-build`, `build-essential`, plus whatever `PX4-Autopilot/Tools/setup/ubuntu.sh` needs) has to come from `apt`, which does need sudo. That step still needs the user to run one command interactively in their own WSL terminal — logged as an open item, not routed around.
+
+**mavsdk API verification**: Rather than write the MAVSDK conversion code from memory/training-data recall of the API, once the venv existed I introspected the actually-installed `mavsdk==3.17.2` package's real docstrings/enum values directly in WSL. This caught three real mismatches against my first draft of `firmware_link/mavsdk_client.py`:
+- `Battery.remaining_percent` is already scaled 0-100, not a 0-1 fraction (draft had `* 100.0`, would have produced 0-10000%).
+- `mavsdk.telemetry.FixType` is a plain `Enum`, not `IntEnum` — `int(fix_type)` raises `TypeError`; needs `.value`.
+- HDOP is not on `GpsInfo` at all — it's a field on the separate `raw_gps()` stream, so the client now merges two independent MAVSDK channels into one `GpsState`.
+
+`MissionItem`'s 14-parameter positional signature, by contrast, matched the first draft exactly. Both the confirmation and the mismatches came from checking the installed package for real rather than trusting recall — logging this because it's the kind of MAVSDK-version-drift issue that's easy to get subtly wrong and hard to notice until it's run against real SITL.
+
+---
+
+## D6 — `ubuntu.sh --no-nuttx` for now; sudo steps require the user to run them
+
+**Decision**: Run PX4's official `Tools/setup/ubuntu.sh --no-nuttx` rather than the full script, and rather than hand-picking apt packages to replicate what it does.
+
+**Rationale**:
+- `--no-nuttx` skips only the ARM cross-compilation toolchain used for building real Pixhawk firmware (confirmed by reading `ubuntu.sh` directly — `INSTALL_NUTTX` gates a separate code block from `INSTALL_SIM`). Current milestone is SITL-only, so this saves a large, currently-unneeded download. If/when real hardware access happens, re-running `ubuntu.sh` without the flag adds NuttX support without redoing anything else.
+- Confirmed by reading the script (not assumed): it explicitly lists Ubuntu 24.04 and 22.04 LTS as supported — the compatibility flag raised in D3 is resolved, this machine's Ubuntu 24.04.1 is officially in scope.
+- Running the official script rather than a hand-extracted apt package list avoids silently missing something it does beyond `apt install` (e.g. adding Gazebo's package repo/key, pip-installing `requirements.txt`).
+
+**Consequence flagged for the user**: like the `cmake`/`ninja` install, this script calls `sudo apt-get install` internally and there's no passwordless sudo available, so it has to be run by the user interactively, not by me.
+
+---
+
+## D7 — Gazebo Harmonic, not jMAVSim (decided by PX4 upstream, not by us)
+
+**Context**: The build prompt asked to prefer jMAVSim over Gazebo if Gazebo proved unreliable under WSLg, to avoid burning time fighting graphics drivers.
+
+**What actually happened**: `Tools/setup/ubuntu.sh` on PX4 v1.17.0 installs Gazebo Harmonic (`gz-harmonic` and friends) as the simulator dependency and does not install Java/jMAVSim at all — confirmed by checking installed packages after running the script (`gz-harmonic 1.0.0-1~noble` present, `java` command missing). PX4 deprecated jMAVSim in favor of Gazebo in recent releases; by pinning to the latest stable tag (v1.17.0, see D-earlier clone note), we inherited that default rather than choosing between them ourselves. If Gazebo's rendering under WSLg turns out to be unreliable when we actually launch a full simulation (vs. just the SITL binary build), that's the point where we'd revisit — logged here as the trigger condition, not yet hit.
+
+---
+
+## D8 — Raw MAVSDK mission uploads need an explicit TAKEOFF item; execution is intermittent under this environment (partially unresolved — flagged, not swept under the rug)
+
+**What happened**: The first end-to-end run against live PX4 SITL "worked" in the shallow sense — connect/arm/upload/start_mission/telemetry all returned success with no errors — but a closer look (prompted by the vehicle's lat/lon looking suspiciously frozen across a 45s telemetry window) showed the vehicle never actually left the ground. `mission.mission_progress()` reported `3/3` (complete) almost immediately after `start_mission()`, `flight_mode` read `MISSION`, and `relative_altitude_m` stayed at ~0.0 the entire time. No error was ever raised anywhere in the stack.
+
+**Root cause #1** (confirmed empirically, not from docs): QGroundControl silently auto-inserts a takeoff mission item when you build a mission through its UI. A raw `mavsdk.mission.upload_mission()` call does not — and PX4's waypoint-reached check for a plain NAV item is horizontal-acceptance-radius-only, so with the vehicle still sitting on the ground, three closely-spaced waypoints (all within ~33m of each other) can be trivially "already within acceptance radius."
+
+**Fix applied**: mark the first waypoint of a ground-start mission with `kind=WaypointKind.TAKEOFF` (the enum already existed in `mission_planner/waypoint.py`; it just wasn't wired through). `firmware_link/mavsdk_client.py`'s `_mission_to_plan()` now maps `WaypointKind` to MAVSDK's `MissionItem.VehicleAction` (`TAKEOFF`/`LAND`/`NONE`). This fix is correct and necessary — confirmed by direct inspection of the uploaded `MissionPlan` (`vehicle_action: TAKEOFF` on item 0) — but **turned out not to be sufficient on its own**, see below.
+
+**Honest status after more testing**: re-running the exact same mission against fresh SITL instances 4 times (1 raw ad-hoc script, 3 through the real `GroundLinkVehicle` + `connectivity_check` code path, one with an added 3s EKF-settling delay before upload) produced the takeoff-and-fly-through-all-3-waypoints behavior **once** and the instant-complete-without-climbing behavior **three times**, with no code difference between the runs. This rules out a settling-time race as the sole explanation (the delay didn't fix it) and points at something environment-level and non-deterministic — most likely PX4's lockstep simulation timing interacting with WSL2's virtualized CPU scheduling, which is a known source of jitter for time-sensitive sim loops, but this is a hypothesis, not confirmed.
+
+**What IS solidly verified, every single run, no exceptions**: connect, arm, mission upload (with correct MAVSDK field mapping), `start_mission()` accepted, and live telemetry (battery/GPS/position) streaming — which is the literal Step 2 deliverable ("connects... arms it, uploads a trivial 3-waypoint mission, and streams back telemetry"). What's NOT reliably verified: the vehicle completing that mission by actually flying it, which turned out to be a harder, flakier thing to pin down than the milestone asked for.
+
+**Not chasing this further right now** — logging it here rather than either quietly re-running until it looks good (misleading) or burning unbounded time on an intermittent SITL/WSL2 timing issue during a scaffolding pass. Flagged explicitly in the Step 4 report as something to revisit, likely worth an EKF/lockstep-readiness check more rigorous than `is_global_position_ok`/`is_home_position_ok` before arming.
+
+**Known gap, separately**: `WaypointKind.RTL` has no equivalent `MissionItem.VehicleAction` in MAVSDK — RTL is a top-level command (`action.return_to_launch()`), not a mission-item property. It currently degrades silently to `NONE` in `_mission_to_plan`. Not a problem for Steps 1-4 (nothing uses `WaypointKind.RTL` yet), but `replanning_engine` will need to issue RTL as a mode-change command rather than a mission waypoint.
+
+**Also found while debugging this**: killing a running connectivity script mid-mission (e.g. via an external `timeout`) and reconnecting a second script to the same still-armed SITL instance can leave the vehicle latched in `HOLD` mode (observed once, likely a datalink-loss failsafe from the abrupt heartbeat gap). Not the same issue as above — a re-run against a fresh SITL instance ruled this out as the cause of the no-takeoff behavior.
+
+---
+
+## D9 — Systematic pass-rate investigation of the mission-execution flakiness (bounded effort, two real bugs fixed, root cause NOT found at the time — SUPERSEDED BY D10, see below)
+
+> **This entry's final paragraph speculated that WSL2 CPU-scheduling/lockstep timing was the likely cause. That was wrong. D10 below found and confirmed the actual root cause: a stale on-disk PX4 mission store, nothing to do with WSL2 or timing.** Kept here rather than deleted/rewritten so the investigation trail (what was ruled out, and how) stays intact and isn't misremembered later.
+
+Following up on D8 with an actual measured pass rate instead of anecdotal runs, per explicit direction to bound the effort and report back rather than chase this indefinitely. Built a small trial harness (`run_trials.sh` + `trial.py`, not committed to the repo — throwaway diagnostic tooling in the session scratchpad) that, per trial: kills any existing PX4/Gazebo processes, launches a fresh SITL instance, waits for boot, runs the real `GroundLinkVehicle` + the actual `connectivity_check` test mission, and records PASS (climbed above 5m) or FAIL (never left the ground) plus PX4's own internal log.
+
+**Bug found #1 — stale Gazebo world reused across "fresh" trials.** The very first 8-trial batch was 0/8, and PX4's own log showed `"gazebo already running world: default"` with a lockstep clock starting from a large, non-zero, ever-increasing value — the `gz sim` server process had been running continuously for 46+ minutes across dozens of supposedly-independent tests, because cleanup only ever killed the `bin/px4` process, never the simulator itself. Fixed the harness to kill `gz sim` between trials too, and added a check that fails loudly (`reason=stale_gazebo_world_reused`) if it ever happens again. This is a real, valid fix — worth keeping in mind for anyone scripting repeated SITL runs — but re-running the 8-trial batch with genuinely fresh worlds every time still scored **0/8**. Not the (sole) cause.
+
+**Bug found #2 — weak arm-readiness gate.** 2 of those 8 trials failed with `mavsdk.action.ActionError: COMMAND_DENIED` directly on `arm()` — PX4 itself refusing to arm despite `wait_ready_to_arm()` (checking only `is_global_position_ok` + `is_home_position_ok`) already having returned. Fixed `firmware_link/mavsdk_client.py`: `wait_ready_to_arm()` now requires PX4's own `is_armable` flag (plus `is_local_position_ok`) to read true for 3 consecutive samples (debounced, not a single flicker), and `arm()` retries up to 5 times on `ActionError`. Re-ran the same 8-trial batch: **zero `COMMAND_DENIED` errors this time** — that failure mode is genuinely fixed — but altitude-climb pass rate was still **0/8**.
+
+**Hypothesis tested and ruled out — insufficient settle time.** Increased the post-boot settle delay from 3s to 15s before issuing any MAVSDK commands, on the theory that the automated harness's tight back-to-back timing (vs. the naturally slower pacing of interactive manual testing, where the one prior success was observed) was the differentiator. 5-trial batch: **0/5**. Ruled out.
+
+**Hypothesis tested and ruled out — SITL and test client sharing one WSL session/pty.** The one earlier manual success had SITL running as the sole process of its own dedicated `wsl.exe` session, with the test script in a completely separate session — structurally different from the harness, which backgrounds SITL inside the same script/session as the test call. Reproduced that exact separate-session structure for one trial: **still FAIL** (max altitude 0.05m). Ruled out.
+
+**Where this leaves things**: 30 systematic automated trials, 0 passes, across four different conditions (stale-world-fixed, arm-readiness-fixed, long-settle, separate-session), against a total sample of 1 success in roughly 5-6 attempts across the whole investigation (manual + automated combined, ~15-20%, though the automated-only rate looks closer to 0%). Two real, verified bugs were found and fixed along the way (stale Gazebo world reuse, weak arm-readiness gate) and both fixes are shipped in `mavsdk_client.py` regardless of the outcome here — they're correct fixes for real problems, independent of whether they explain the climb failure. The climb failure itself remains **unexplained** after a genuinely bounded, structured effort. Leading candidates not yet tested: PX4/Gazebo lockstep timing sensitivity that's specific to WSL2's virtualized CPU scheduling (would require comparing against native Linux to confirm), or something in PX4's own navigator/takeoff state machine visible only via its uORB topics rather than MAVLink-level telemetry (would require log analysis with PX4's `pyulog` tooling on the `.ulg` flight logs SITL already writes to `~/PX4-Autopilot/log/`, not yet attempted).
+
+**Recommendation** (superseded by D10 below — kept for the trail): treat "connect/arm/upload/telemetry-stream reliable, autonomous mission-completion unreliable under this WSL2 setup" as the accurate current baseline.
+
+---
+
+## D10 — ROOT CAUSE FOUND AND CONFIRMED: stale on-disk `dataman` mission store, not WSL2/timing
+
+Following the direction to check PX4's own `.ulg` flight log with `pyulog` (independent of MAVSDK) before concluding this was an environment issue.
+
+**What the `.ulg` showed, from a failed trial**: `mission_result` reported `seq_current=5, seq_reached=5, finished=1` within 50ms of arming — but the uploaded mission only had 3 waypoints (valid indices 0-2). PX4 was executing waypoint state that didn't come from the mission we'd just uploaded. `vehicle_local_position.z` stayed at ~0 the entire time (no real climb), and `vehicle_status` showed the vehicle auto-disarming ~11 seconds after arming (`arming_state: 2→1`) — consistent with PX4's landed-timeout safety disarm, because the land-detector never saw the vehicle leave the ground: it never actually tried to, since the navigator thought the mission was already finished.
+
+**Root cause**: PX4's `dataman` file — its on-disk mission/waypoint storage, at `~/PX4-Autopilot/build/px4_sitl_default/rootfs/dataman` — persists across process restarts by default. Every trial across the entire investigation (D8, D9, and the 30 automated trials in D9) killed the `bin/px4` process (and later, `gz sim`) between runs, but never touched this file. It had been accumulating mission-upload state since the very first SITL launch of the session (11:57, confirmed by file mtime). Each "fresh" trial was arming a fresh PX4 process that immediately read stale leftover mission state off disk — not a timing race, not WSL2 scheduler jitter, not anything in `firmware_link`'s MAVSDK code. The two real bugs fixed in D8 and D9 (missing `TAKEOFF` item, weak arm-readiness gate) were both genuine, correct fixes for genuine problems — they just weren't the problem causing the pass-rate investigation's 0/30.
+
+**Fix, confirmed**: delete `dataman` before every SITL launch. Single-trial test after deleting it: **PASS, max_alt=14.95m**. Follow-up 8-trial batch (dataman deleted before each, exact same harness that measured 0/8 three times in D9): **8/8 PASS**, altitudes 14.94-14.96m every time — tight, consistent, not a fluke. Re-verified end-to-end afterward through the actual `sim/launch_sitl.sh` script (not just the throwaway trial harness) with the real `firmware_link/connectivity_check.py`: clean climb to 15m and full three-waypoint transit, confirmed by continuously changing lat/lon across the whole flight.
+
+**Fix applied in the codebase**: `sim/launch_sitl.sh` now kills any lingering `bin/px4`/`gz sim` processes and deletes `dataman` before every launch, with a comment explaining why and warning not to remove it. This needs to be part of every SITL restart going forward — a manual `make px4_sitl gz_x500` without going through this script (or without remembering this step) will silently reintroduce the bug.
+
+**Native Linux comparison (D9's step 2 contingency)**: not needed. The cause is confirmed and understood; it isn't environment-specific — the same stale-dataman bug would reproduce identically on native Linux, since it has nothing to do with WSL2.
+
+**Lesson for next time**: when a MAVLink-level symptom looks inexplicable (commands succeed, telemetry looks fine, but behavior is wrong), check PX4's own internal `.ulg` log before assuming an environment/timing cause — `mission_result.seq_current` exceeding the uploaded item count was the single line that cracked this open, and it's invisible from the MAVSDK/telemetry side entirely.
+
+---
+
+*(Further decisions — mission file schema — logged inline below as they're made.)*
