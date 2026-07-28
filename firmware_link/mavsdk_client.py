@@ -42,6 +42,7 @@ account:
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from collections.abc import AsyncIterator
 
@@ -170,6 +171,69 @@ class GroundLinkVehicle:
 
     async def start_mission(self) -> None:
         await self.drone.mission.start_mission()
+
+    # -- Replanning handoff: pause -> confirm settled -> clear -> upload ->
+    # resume. Every method below maps to a real, introspected MAVSDK method
+    # (see replanning_engine/DESIGN.md's "Verified against MAVSDK" section) --
+    # nothing here is assumed. The full handoff sequence itself has NOT been
+    # run against live SITL yet; that verification happens in
+    # replanning_engine/engine.py, not here (see decisions.md for the
+    # measured-pass-rate write-up once done).
+
+    async def pause_mission(self) -> None:
+        """mission.pause_mission() -- puts the vehicle into HOLD mode."""
+        await self.drone.mission.pause_mission()
+
+    async def clear_mission(self) -> None:
+        """mission.clear_mission() -- removes the mission stored on the vehicle."""
+        await self.drone.mission.clear_mission()
+
+    async def hold(self) -> None:
+        """action.hold() -- switch to HOLD/Loiter at current position+altitude."""
+        await self.drone.action.hold()
+
+    async def return_to_launch(self) -> None:
+        """action.return_to_launch() -- PX4-native RTL: climb, transit home, land."""
+        await self.drone.action.return_to_launch()
+
+    async def land(self) -> None:
+        """action.land() -- land immediately at the current position."""
+        await self.drone.action.land()
+
+    async def set_speed(self, speed_m_s: float) -> None:
+        """action.set_current_speed() -- ephemeral, not persisted on the vehicle."""
+        await self.drone.action.set_current_speed(speed_m_s)
+
+    async def resume_mission_from(self, index: int) -> None:
+        """mission.set_current_mission_item() then start_mission(). Whether
+        this is actually the right way to resume a mid-flight replan (vs.
+        just calling start_mission() again on a freshly-uploaded plan) is
+        one of the open empirical questions in DESIGN.md -- kept as a
+        separate method so engine.py can try either without restructuring."""
+        await self.drone.mission.set_current_mission_item(index)
+        await self.drone.mission.start_mission()
+
+    async def mission_progress_stream(self) -> AsyncIterator[tuple[int, int]]:
+        """Yields (current, total) mission item indices as they change."""
+        async for progress in self.drone.mission.mission_progress():
+            yield (progress.current, progress.total)
+
+    async def flight_mode_stream(self) -> AsyncIterator[str]:
+        """Yields PX4 flight-mode names (e.g. 'HOLD', 'MISSION') as they change.
+
+        Uses FlightMode.name explicitly (not str(mode)/f-string formatting)
+        -- both were empirically confirmed to already produce the clean
+        name ('HOLD', not 'FlightMode.HOLD') on the installed mavsdk, but
+        .name doesn't depend on Enum's __str__/__format__ behavior, which
+        has changed across Python versions historically.
+        """
+        async for mode in self.drone.telemetry.flight_mode():
+            yield mode.name
+
+    async def ground_speed_stream(self) -> AsyncIterator[float]:
+        """Yields horizontal ground speed in m/s, computed from NED velocity."""
+        async for v in self.drone.telemetry.velocity_ned():
+            yield math.hypot(v.north_m_s, v.east_m_s)
 
     async def telemetry_stream(self) -> AsyncIterator[TelemetrySnapshot]:
         """Merge battery/gps/position/attitude into combined snapshots.
