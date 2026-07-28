@@ -5,20 +5,20 @@ This is the ONLY file in replanning_engine that imports firmware_link (and,
 transitively, touches MAVSDK) -- everything else in the package is pure
 Python (see DESIGN.md).
 
-STATUS (see decisions.md D11 for the full account -- read it before trusting
-this): orchestration logic is unit-tested with a hand-written vehicle
-stand-in (tests/test_engine.py). Run against live SITL, a real bug was
-found and fixed (MAVSDK's start_mission() can report success while PX4's
-internal mode-switch is silently rejected -- _start_mission_and_confirm_
-resumed below now actively verifies and retries). That fix is confirmed
-correct by 2 clean isolated single-run tests (full reroute, real continuous
-flight, one reaching the final waypoint). It is NOT confirmed reliable: a
-5-trial scripted batch measurement of the identical script hit a SEPARATE,
-unexplained silent hang in every trial (not the diagnosed-and-fixed
-symptom, which now fails loudly within ~15s if it recurs). Treat this
-module as "root cause of one bug understood and fixed, overall reliability
-of the handoff still an open question" -- not as "verified," until that
-batch-vs-isolated discrepancy is diagnosed.
+STATUS (see decisions.md D11/D14 for the full account): orchestration logic
+is unit-tested with a hand-written vehicle stand-in (tests/test_engine.py).
+Run against live SITL, a real bug was found and fixed (MAVSDK's
+start_mission() can report success while PX4's internal mode-switch is
+silently rejected -- _start_mission_and_confirm_resumed below now actively
+verifies and retries). CONFIRMED RELIABLE via a 5-trial measured batch:
+5/5 PASS, each reaching the final waypoint around 27s with 233-240 distinct
+positions (real continuous flight), consistent across trials (D14). An
+earlier batch measurement showed 0/5 with silent hangs; that was diagnosed
+as a test-harness artifact (SITL backgrounded in the same script/session as
+the Python client), NOT a flaw in this module -- see D14 for the full
+diagnosis. Any new SITL trial script for this module must launch SITL as
+an independent process invocation, never backgrounded inside the same
+script/session that runs the MAVSDK client.
 """
 
 from __future__ import annotations
