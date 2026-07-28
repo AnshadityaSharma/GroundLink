@@ -31,8 +31,12 @@ Built on **PX4** (via **MAVSDK-Python**), validated in **SITL** (Software-In-The
 | `mission_planner` — waypoint model + lawnmower coverage-grid generator | ✅ Built, tested (7 tests) |
 | `constraint_monitor` — battery/GPS/geofence threshold checks, structured violation events | ✅ Built, tested (10 tests) |
 | `firmware_link` — MAVSDK integration: connect/arm/upload/telemetry | ✅ Built, verified against real PX4 SITL (8/8 trials, no flakiness — see [decisions.md D10](decisions.md)) |
-| `replanning_engine` — no-fly-zone reroute, battery-critical return, GPS-degraded downgrade | 🚧 In design (see [replanning_engine/DESIGN.md](replanning_engine/DESIGN.md)) |
+| `replanning_engine` — battery-critical return, GPS-degraded downgrade | ✅ Built, verified against real PX4 SITL (10/10 and 5/5 trials — see [decisions.md D12](decisions.md)/[D13](decisions.md)) |
+| `replanning_engine` — no-fly-zone reroute (grid A*) | 🟡 Built, root-cause bug found+fixed and confirmed correct in 2 isolated SITL runs, but batch-measured reliability still unresolved (0/5 — open issue, see [decisions.md D11](decisions.md)) |
+| `sim/failure_injection` — battery/GPS/no-fly-zone scenario configs | ✅ Built (real PX4 SITL params), unit-tested; live-SITL injection itself not yet verified |
 | `dashboard` — live Streamlit ground station | ⬜ Not started |
+
+See [replanning_engine/DESIGN.md](replanning_engine/DESIGN.md) for the design and decisions.md D8-D13 for the full, honest verification history — including the parts that are confirmed vs. still open.
 
 Every claim of "verified" or "tested" in this repo means it was actually run against a real PX4 SITL instance, not mocked — that's a deliberate project convention (see `context.md`). Where something hasn't been tested, this README says so explicitly.
 
