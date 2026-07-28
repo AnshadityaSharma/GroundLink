@@ -5,8 +5,6 @@
 Most mission planners upload a route and fly it blind. If the battery drains faster than expected, GPS degrades, or a no-fly zone appears mid-flight, they fall back to a crude failsafe that abandons the mission — even when a smarter, partial-completion path was possible. GroundLink treats replanning as a first-class capability: it monitors live telemetry, detects constraint violations (low battery, degraded GPS, geofence/no-fly-zone breaches) in real time, and automatically reroutes the remaining mission instead of aborting it.
 
 Built on **PX4** (via **MAVSDK-Python**), validated in **SITL** (Software-In-The-Loop simulation, using PX4 + Gazebo Harmonic), with the same code path intended to work on real hardware.
-
-> Team 11 — Anshaditya Sharma, Animesh Ojha, Balajee Jivesh · Autonomous Drones course project.
 > See [context.md](context.md) for the full problem statement, and [decisions.md](decisions.md) for a complete, dated log of every architectural decision and every bug found along the way — including three real PX4/MAVSDK bugs found and fixed during development (not hidden, not glossed over).
 
 ---
