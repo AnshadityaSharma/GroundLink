@@ -20,6 +20,16 @@ pkill -9 -f 'gz sim' 2>/dev/null || true
 pkill -9 -f 'mavsdk_server' 2>/dev/null || true
 sleep 2
 rm -f "$PX4_DIR/build/px4_sitl_default/rootfs/dataman"   # D10
+# PX4 persists param changes (param.set_param_*) to this file like a real
+# autopilot's EEPROM, and reloads it at boot -- same class of bug as D10's
+# dataman. A failure-injection trial that sets SIM_GPS_USED or
+# SIM_BAT_MIN_PCT will silently carry that fault into the next "fresh" SITL
+# instance otherwise: SIM_GPS_USED left at 3 from a previous trial means the
+# next boot never gets a real GPS fix, so wait_ready_to_arm() times out
+# waiting for health checks that can never pass. Confirmed via `strings` on
+# this file after a GPS-scenario trial (D19), not guessed.
+rm -f "$PX4_DIR/build/px4_sitl_default/rootfs/parameters.bson" \
+      "$PX4_DIR/build/px4_sitl_default/rootfs/parameters_backup.bson"
 
 cd "$PX4_DIR"
 setsid nohup env HEADLESS=1 make px4_sitl gz_x500 </dev/null >"$LOG" 2>&1 &

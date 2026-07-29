@@ -43,13 +43,25 @@ class NoFlyZoneScenario:
 @dataclass(frozen=True)
 class BatteryDrainScenario:
     """Injects low battery via PX4's real SITL battery simulation
-    (src/modules/simulation/battery_simulator/battery_simulator_params.c,
-    confirmed by reading it directly):
+    (src/modules/simulation/battery_simulator/battery_simulator_params.c
+    and BatterySimulator.cpp, confirmed by reading both directly):
 
-      SIM_BAT_MIN_PCT floors/sets the simulated battery percentage
-        directly -- used by apply_battery_drain_scenario() below for an
-        immediate, deterministic "battery is now at X%" injection, rather
-        than waiting out a real-time drain.
+      SIM_BAT_MIN_PCT is a FLOOR, not a setpoint: BatterySimulator.cpp does
+        `_battery_percentage = max(_battery_percentage, min_pct / 100)`
+        every cycle. It does NOT immediately jump the reported percentage
+        to target_percent -- an earlier version of this docstring claimed
+        it did, which was wrong (confirmed by reading the source, not
+        guessed; see decisions.md D19). The vehicle's battery starts at
+        100% the instant it arms (BatterySimulator.cpp forces
+        _battery_percentage = 1.f while disarmed) and drains linearly from
+        there over SIM_BAT_DRAIN seconds, clamped at the floor once it
+        gets there. So apply_battery_drain_scenario() sets a target the
+        battery will reach in REAL TIME, after roughly
+        (100 - target_percent) / 100 * drain_interval_s seconds of armed
+        flight -- with the PX4-default 60s drain interval and this
+        module's target_percent=12.0, that's about 53 seconds after
+        arming, not instant. Apply it before or at arm time; the drain
+        clock starts at arm regardless of when the param was set.
       SIM_BAT_DRAIN is the drain INTERVAL in seconds (PX4 default 60;
         lower = faster drain) -- exposed here for a gradual-drain scenario
         variant; apply_battery_drain_scenario() only uses target_percent
@@ -64,14 +76,23 @@ class BatteryDrainScenario:
 @dataclass(frozen=True)
 class GpsDegradationScenario:
     """Injects degraded GPS via PX4's real SITL GPS sim parameter
-    (src/modules/simulation/sensor_gps_sim/parameters.c, confirmed by
-    reading it directly):
+    (src/modules/simulation/sensor_gps_sim/parameters.c and
+    SensorGpsSim.cpp, confirmed by reading both directly):
 
       SIM_GPS_USED sets the simulated number of satellites used (PX4
-      default 10). Dropping it low enough degrades fix type/HDOP through
-      PX4's own EKF2 estimator, not something GroundLink fakes at the
-      telemetry level -- the degradation constraint_monitor observes is
-      the real consequence of a real (simulated) sensor input change.
+      default 10). It is a hard threshold, not a gradual one:
+      SensorGpsSim.cpp checks `if (_sim_gps_used.get() >= 4)` and emits
+      either a clean 3D fix (fix_type=3, hdop=0.7) or NO_FIX (fix_type=0,
+      hdop=100) -- nothing in between, and no EKF2 involvement (an earlier
+      version of this docstring said the degradation went "through PX4's
+      own EKF2 estimator"; the actual simulated sensor_gps message is
+      hardcoded directly at these two values, confirmed by source, not
+      guessed -- see decisions.md D19). So dropping below 4 satellites
+      flips the reported fix instantly, within about one telemetry sample
+      of the parameter taking effect -- not a real-time degradation like
+      BatteryDrainScenario's drain-to-floor. GPS_DEGRADATION_LOW_SATS's 3
+      satellites lands on the NO_FIX side, which is what makes it trip
+      GPS_FIX_DEGRADED rather than just GPS_HDOP_HIGH.
     """
 
     simulated_num_satellites: int

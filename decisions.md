@@ -346,3 +346,86 @@ Unit/orchestration suite unaffected (77 passed — nothing in `tests/` exercises
 **Conclusion**: the one remaining "trusts the return value" gap flagged in D17 is closed. Every MAVSDK mode-transition call in the replan handoff path (`_execute_handoff`'s resume, and now the GPS-recovery resume) goes through the same confirm-and-retry discipline.
 
 **Left alone, per explicit instruction**: the unexplained t~26s deceleration anomaly from the discarded pre-fix speed-measurement runs (D15). The post-hoc validity gate already handles it correctly by rejecting such windows; not chased further.
+
+---
+
+## D19 — failure_injection's SITL fault-parameter assumptions corrected against real PX4 source, and a real param-persistence bug found and fixed (same class as D10)
+
+`sim/failure_injection/scenarios.py` had never been run against live SITL. Before building the end-to-end scenario trials, its docstring claims about `SIM_BAT_MIN_PCT` and `SIM_GPS_USED` were checked against PX4's actual source (`BatterySimulator.cpp`, `SensorGpsSim.cpp`) rather than trusted, following the project's standing discipline of confirming mechanism before testing behavior built on it.
+
+**Battery: `SIM_BAT_MIN_PCT` is a floor, not a setpoint.** The docstring claimed it gives an "immediate, deterministic" battery-percent injection. `BatterySimulator.cpp` shows otherwise: `_battery_percentage = max(_battery_percentage, min_pct / 100)` every cycle, and the percentage itself is forced to exactly 1.0 (100%) while disarmed and only drains while armed, linearly over `SIM_BAT_DRAIN` seconds (default 60). So `apply_battery_drain_scenario()` sets a target the battery reaches in real time -- roughly `(100 - target_percent) / 100 * drain_interval_s` seconds after arming -- not instantly. Fixed the docstring to state this plainly, with the mechanism cited.
+
+**GPS: `SIM_GPS_USED` is a hard instant threshold, not gradual EKF2 degradation.** The docstring claimed the degradation happens "through PX4's own EKF2 estimator." `SensorGpsSim.cpp` shows a hard `if (_sim_gps_used.get() >= 4)` branch: either a clean 3D fix (fix_type=3, hdop=0.7) or NO_FIX (fix_type=0, hdop=100), nothing in between, no EKF2 involvement -- the simulated sensor message itself is hardcoded at these two values. Fixed the docstring accordingly. (One further correction made empirically, not from source alone -- see the D20 write-up: the raw PX4 value 0 is reported to MAVSDK/GroundLink as `GpsFixType.NO_GPS`, not `NO_FIX`, despite the PX4 C++ comment literally saying `// No fix`.)
+
+**Real bug found while building the GPS-scenario trial: PX4 param changes persist to disk across "fresh" SITL restarts, same class of bug as D10's `dataman` issue.** `sim/trials/launch_sitl_bg.sh` deleted `dataman` before every launch but not PX4's parameter store. Confirmed via `strings` on `$PX4_DIR/build/px4_sitl_default/rootfs/parameters.bson` after a GPS-scenario trial: `SIM_GPS_USED` and `SIM_BAT_MIN_PCT` were present in the persisted file. Consequence, reproduced twice in a row before being diagnosed: a GPS-scenario trial that set `SIM_GPS_USED=3` left that value on disk; the next "fresh" SITL boot loaded it at startup, so the vehicle never obtained a real GPS fix and `wait_ready_to_arm()` timed out waiting for health checks that could never pass -- not a flaky trial, a deterministic consequence of stale on-disk parameter state.
+
+**Fix**: `launch_sitl_bg.sh` now also deletes `parameters.bson` and `parameters_backup.bson` before every launch, alongside `dataman`, with a comment explaining why (mirroring D10's dataman comment). This is a testing/tooling fix, not a product-code fix -- nothing in `replanning_engine`, `firmware_link`, or `sim/failure_injection` changed for this part.
+
+**Lesson generalized from D10**: any PX4 SITL on-disk state that isn't part of the source tree itself (dataman, saved parameters, and potentially others not yet hit) must be reset before every trial that claims to start "fresh." This is now the second time an unreset on-disk file has silently corrupted a "fresh" restart -- worth treating as a standing risk for any future SITL state file, not just these two.
+
+---
+
+## D20 — All three failure-injection scenarios confirmed end-to-end: the real detection→replan→execute trigger path, not each piece in isolation
+
+Per explicit direction, this verifies the actual trigger chain the evaluation will exercise -- `sim/failure_injection` fault injection → real detection (`constraint_monitor.ConstraintMonitor.watch()` for battery/GPS; application-level position/progress announcement for no-fly-zone, per `scenarios.py`'s own design docstring, since PX4 has no native mid-flight-geofence concept) → `replanning_engine` fed the real detected values, not hardcoded test inputs → `firmware_link` executes the response -- as opposed to D12/D13/D15/D16/D17 which called `engine.handle_*()` directly. Same measured-batch discipline as every prior verification: isolated clean run first, then a 5-trial batch, fresh SITL launched as an independent process invocation each time (D14), now also with parameters reset each time (D19).
+
+### Battery-drain scenario
+
+Mission: takeoff + 3 legs (~390m each). `apply_battery_drain_scenario(vehicle, BATTERY_DRAIN_CRITICAL)` (target 12%) applied before arming. `ConstraintMonitor(Thresholds())` (`battery_critical_percent=15.0`) run via `.watch()` over the live `telemetry_stream()` -- the real detection path. On the first `BATTERY_CRITICAL` event, its `remaining_percent` (not a hardcoded value) is fed straight into `engine.handle_battery_critical()`.
+
+**Result: isolated run + 5/5 batch, all PASS.** Detection fired consistently at 15.0% remaining, 52.4-54.1s after arming (matches D19's predicted ~51-53s, confirmed rather than assumed), engine chose `rtl` every time (12% floor sits between `land_immediately_below_percent=8` and `rtl_below_percent=20`, as designed), `RETURN_TO_LAUNCH` mode confirmed within ~1.2s of the call, and distance-to-home was independently confirmed shrinking in every trial afterward (not just the mode flag) -- e.g. 176m -> 144m over a 15s post-command window in the isolated run. Full return-and-land mechanics were already proven in D16, so this test's scope was deliberately the wiring: real drain -> real detection -> real engine call -> real action initiation, not re-measuring landing precision.
+
+| trial | detected % | t to detect (s) | outcome | t to RTL mode (s) | returning? |
+|-------|-----------|------------------|---------|--------------------|------------|
+| iso | 15.0 | 53.8 | rtl | 1.2 | yes |
+| 1 | 15.0 | 53.4 | rtl | 1.2 | yes |
+| 2 | 15.0 | 52.9 | rtl | 1.2 | yes |
+| 3 | 15.0 | 53.4 | rtl | 1.0 | yes |
+| 4 | 15.0 | 52.4 | rtl | 1.0 | yes |
+| 5 | 15.0 | 54.1 | rtl | 1.0 | yes |
+
+### GPS-degradation scenario
+
+Mission: takeoff + 3 legs, fault applied only after the vehicle is confirmed in steady cruise (same climb-out gate as D15) so this is a genuine mid-flight failure. `apply_gps_degradation_scenario(vehicle, GPS_DEGRADATION_LOW_SATS)` (`SIM_GPS_USED=3`) applied, then the vehicle's own `telemetry_stream()` is run through `ConstraintMonitor.check()` directly (the same logic `.watch()` wraps) so the concurrently-observed real `fix_type`/`hdop` -- not values reconstructed from the violation event's dict, which doesn't carry hdop -- can be fed to `engine.handle_gps_degraded()`.
+
+**Result: isolated run + 5/5 batch, all PASS**, after fixing the param-persistence bug found along the way (D19) -- the first two attempts both failed at `wait_ready_to_arm()` before the fix, for the reason diagnosed there, not counted as scenario failures. Detection was near-instant every time (0.01-0.04s after injection, matching D19's "hard threshold, no EKF2" finding), engine chose `hold` every time, `HOLD` mode confirmed within 0.2-1.2s, and the vehicle was confirmed genuinely stopped (ground speed 0.03-0.15 m/s) 6s after the command in every trial.
+
+| trial | detected fix | t to detect (s) | outcome | t to HOLD mode (s) | speed in hold (m/s) |
+|-------|-------------|------------------|---------|---------------------|----------------------|
+| iso | NO_GPS | 0.04 | hold | 0.8 | 0.032 |
+| 1 | NO_GPS | 0.03 | hold | 0.2 | 0.15 |
+| 2 | NO_GPS | 0.01 | hold | 1.21 | 0.125 |
+| 3 | NO_GPS | 0.02 | hold | 0.2 | 0.106 |
+| 4 | NO_GPS | 0.04 | hold | 0.2 | 0.094 |
+| 5 | NO_GPS | 0.01 | hold | 0.8 | 0.114 |
+
+**One more real, source-contradicting finding surfaced by actually running it, not caught by reading source alone**: PX4 reports the "no fix" case (raw `fix_type=0`) to MAVSDK/GroundLink as `GpsFixType.NO_GPS`, not `GpsFixType.NO_FIX` -- despite PX4's own C++ comment on that branch literally saying `// No fix`. D19's docstring fix (written from source alone, before running) had used the label "NO_FIX", which was wrong for exactly this reason; corrected here. It does not change any test's pass/fail, since `decide_gps_response()` compares `fix_type < min_fix_type_to_continue` using the enum's ordinal value (`GpsFixType.NO_GPS = 0`), and 0 is still correctly below `FIX_3D = 3` regardless of which name is attached to it -- but it's a reminder that a source read establishes mechanism, not vocabulary, and both matter when writing something meant to be read later.
+
+**Also observed, flagged rather than chased (consistent with the standing "leave documented open items, don't chase every anomaly" instruction)**: `live_hdop` was inconsistent across trials -- `0.7` (the pre-fault "good fix" value) in two trials, `NaN` in three. `mavsdk_client.py`'s own design comment already explains why: `fix_type` and `hdop` are merged from two independently-updating MAVSDK channels (`gps_info()` and `raw_gps()`) into one `GpsState`, so the very first snapshot after an instant fault flip can carry a fresh `fix_type` paired with a stale or not-yet-populated `hdop` from before the flip. This did not affect any outcome here -- `decide_gps_response()` checks `fix_type` first and returns `HOLD` before `hdop` is ever consulted -- but it is a real telemetry-merge artifact worth knowing about for any future scenario that triggers off `hdop` (e.g. a pure `GPS_HDOP_HIGH`/slow-down scenario) rather than `fix_type`.
+
+### No-fly-zone scenario
+
+See D21 immediately below.
+
+---
+
+## D21 — No-fly-zone scenario confirmed end-to-end: 5/5, zero zone entries across 15,683 checked positions
+
+Completes the D20 set. Unlike battery/GPS, this scenario deliberately does not go through `ConstraintMonitor` -- `scenarios.py`'s own design docstring is explicit that a mid-flight no-fly-zone is an application-level announcement, since PX4 has no native concept of a geofence appearing during a mission. So the real trigger path here is: `make_no_fly_zone_scenario()` builds a zone straddling a specific leg of the **actual uploaded mission** -> application-level detection watching the same `mission_progress_stream()` `engine.track_mission_progress()` consumes, for the vehicle having left the waypoint just before the blocked leg -> `engine.handle_no_fly_zone()` fed the real zone and the **real current position read off live telemetry** at that moment, not a hardcoded position -> `firmware_link` executes the reroute handoff (D11/D14's already-proven pause/clear/upload/resume mechanics).
+
+**Test**: 4-waypoint mission (~200m legs). Zone built (via `make_no_fly_zone_scenario`, 80m wide) straddling the leg from `waypoints[1]` to `waypoints[2]`. Once `mission_progress` shows the vehicle heading to item 2 (i.e. it has left item 1, the leg about to be blocked), the real zone and real position are handed to `handle_no_fly_zone()`. After that, the mission is watched through to its last item, and -- the actual proof of avoidance, not just trusting the `"rerouted"` outcome string -- **every recorded position from the moment of announcement onward is checked geometrically against the zone polygon** (`shapely.Polygon.contains`), not sampled or assumed.
+
+**Result: isolated run + 5/5 batch, all PASS.**
+
+| trial | t to announce (s) | progress at announce | outcome | new remaining wps | t to mission end (s) | positions checked | zone entries |
+|-------|--------------------|-----------------------|---------|---------------------|------------------------|---------------------|----------------|
+| iso | 58.12 | 2 | rerouted | 6 | 55.31 | 3039 | 0 |
+| 1 | 59.35 | 2 | rerouted | 6 | 51.85 | 3208 | 0 |
+| 2 | 58.41 | 2 | rerouted | 6 | 51.84 | 3126 | 0 |
+| 3 | 57.81 | 2 | rerouted | 6 | 51.55 | 3006 | 0 |
+| 4 | 57.38 | 2 | rerouted | 6 | 51.46 | 3153 | 0 |
+| 5 | 57.26 | 2 | rerouted | 6 | 52.27 | 3151 | 0 |
+
+**Zero zone entries across 15,683 checked positions, combined.** The reroute consistently expanded the 2-waypoint remaining path (the blocked leg's target plus the final waypoint) into a 6-waypoint detour, and every trial's mission completed in a tight 51.5-52.3s window after the reroute (the isolated run's 55.31s was not re-seen in the batch, consistent with normal SITL timing variance rather than a pattern).
+
+**Conclusion**: all three failure-injection scenarios (D20 battery, D20 GPS, D21 no-fly-zone) are now confirmed through the real detection -> replan -> execute path each will use in the actual evaluation, not just via `engine.handle_*()` called directly with test-chosen inputs. Combined with D14/D15/D16/D17/D18's direct verification of the underlying engine mechanics, every trigger type GroundLink supports has now been measured against live SITL twice: once at the mechanism level, once at the real end-to-end trigger level.
