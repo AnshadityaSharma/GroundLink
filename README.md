@@ -31,8 +31,8 @@ Built on **PX4** (via **MAVSDK-Python**), validated in **SITL** (Software-In-The
 | `mission_planner` — waypoint model + lawnmower coverage-grid generator | ✅ Built, tested (7 tests) |
 | `constraint_monitor` — battery/GPS/geofence threshold checks, structured violation events | ✅ Built, tested (10 tests) |
 | `firmware_link` — MAVSDK integration: connect/arm/upload/telemetry | ✅ Built, verified against real PX4 SITL (8/8 trials, no flakiness — see [decisions.md D10](decisions.md)) |
-| `replanning_engine` — battery-critical return, GPS-degraded downgrade | ✅ Built, verified against real PX4 SITL (10/10 and 5/5 trials — see [decisions.md D12](decisions.md)/[D13](decisions.md)) |
-| `replanning_engine` — no-fly-zone reroute (grid A*) | 🟡 Built, root-cause bug found+fixed and confirmed correct in 2 isolated SITL runs, but batch-measured reliability still unresolved (0/5 — open issue, see [decisions.md D11](decisions.md)) |
+| `replanning_engine` — battery-critical return, GPS-degraded downgrade | ✅ Built, verified against real PX4 SITL (10/10 and 5/5 trials — see [decisions.md D12](decisions.md)/[D13](decisions.md)). Effects verified too, not just the commands: `set_current_speed` measurably halves real ground speed (5/5, [D15](decisions.md)), RTL completes the full return-and-land through to autonomous disarm (5/5, [D16](decisions.md)), and GPS-recovery resume continues from the current waypoint (5/5, [D17](decisions.md)) |
+| `replanning_engine` — no-fly-zone reroute (grid A*) | ✅ Built, verified against real PX4 SITL (5/5 trials, each reaching the final waypoint in ~27s). The earlier 0/5 batch was diagnosed as a test-harness artifact, not a code flaw — see [decisions.md D14](decisions.md) |
 | `sim/failure_injection` — battery/GPS/no-fly-zone scenario configs | ✅ Built (real PX4 SITL params), unit-tested; live-SITL injection itself not yet verified |
 | `dashboard` — live Streamlit ground station | ⬜ Not started |
 
@@ -181,7 +181,7 @@ Leave that running in one terminal. In a second WSL2/Linux/macOS terminal, with 
 source ~/groundlink-venv/bin/activate
 cd /path/to/GroundLink
 
-# Run the test suite (17 tests, no SITL needed):
+# Run the test suite (77 tests, no SITL needed):
 pytest -v
 
 # Connect to the running SITL instance, arm, upload a 3-waypoint mission,

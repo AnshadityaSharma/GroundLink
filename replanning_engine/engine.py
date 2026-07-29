@@ -166,9 +166,23 @@ class ReplanningEngine:
         """Called once GPS quality recovers above thresholds after a HOLD.
         The mission was never cleared for a plain GPS-degraded HOLD (unlike
         the no-fly-zone reroute path), so resuming just needs the vehicle
-        back in MISSION mode -- exactly HOW to best do that (start_mission()
-        again vs. set_current_mission_item()) is one of DESIGN.md's open
-        empirical questions, left to be settled during SITL verification."""
+        back in MISSION mode.
+
+        DESIGN.md asked whether that needs set_current_mission_item() or a
+        plain start_mission(). Settled against live SITL (decisions.md D17):
+        start_mission() alone RESUMES from the current mission item rather
+        than restarting from item 0, so this is correct as written. 5/5:
+        progress held at item 2 across the HOLD and resume, then ran on to
+        the final waypoint.
+
+        Known gap: unlike _execute_handoff, this trusts start_mission()'s
+        return value instead of going through
+        _start_mission_and_confirm_resumed(). The mode switch succeeded
+        first try in all 5 trials (~1.0s), plausibly because a plain resume
+        involves none of the pause/clear/upload state churn the D11
+        rejection race needed -- but that is not proof it cannot happen.
+        Routing this through the confirm-and-retry wrapper is the safer
+        shape (see D17)."""
         await self.vehicle.start_mission()
         remaining = self.remaining_waypoints()
         return self._event(ReplanTrigger.GPS_DEGRADED, "gps recovered, resuming mission", "resumed", remaining, remaining)

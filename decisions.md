@@ -209,3 +209,126 @@ Investigated per explicit direction, checking two specific hypotheses before tou
 **Result: 5/5 PASS.** Every trial reached the final waypoint (`reached_idx2=True`), consistently around 27s (27.10, 27.17, 27.14, 27.16, 27.21s), 233-240 distinct positions each (real continuous flight), altitude steady at 15.0-15.1m. This is a materially cleaner, more consistent result than even the two earlier "successful" isolated runs from D11 (which had more variable timing/position counts) -- strong evidence this is the same underlying behavior each time, not luck.
 
 **Conclusion**: the no-fly-zone reroute handoff (`ReplanningEngine.handle_no_fly_zone()`, including the D11 mode-switch-confirmation fix) is now genuinely measured-reliable, not just "correct in isolation." D11's "open issue" status is resolved -- it was never a flaw in the reroute/replan logic, it was an artifact of how the trial harness itself launched SITL. All future SITL trial scripts in this project must launch SITL as an independent process, not backgrounded inside the same script that runs the test client -- noted here so this isn't rediscovered the hard way.
+
+---
+
+## D15 — `set_current_speed()` verified to actually change real flight speed: 5/5, and the measurement bug that made the first attempt meaningless
+
+D12 left this explicitly open: `handle_gps_degraded()`'s SLOW_DOWN path was confirmed to *return* `slowed_down` and leave the mission progressing, but nothing checked whether the vehicle's real velocity changed. Checking it turned out to be mostly a measurement-discipline problem, not a code problem.
+
+**The measurement bug (found, not guessed).** The first version sampled `speed_before` as soon as a short stability check passed. It reported `speed_before = 3.51 m/s +/- 1.56` — a standard deviation a third of the mean, i.e. not a cruise speed at all. Rather than tighten thresholds blindly, the script was made to emit a downsampled speed/altitude/mission-progress trace. The trace showed exactly what was wrong:
+
+```
+t=0.0 -> 16.5s   speed ~0.00, alt 0 -> 14.3    (pure vertical climb-out)
+t=17.0 -> 25.6s  speed 0.69 -> 4.98, steady    (accelerating into the leg, then cruise)
+t=26.1 -> 28.6s  speed 4.55, 3.69, 2.86, 2.21, 1.70, 1.25   (decelerating -- unprompted)
+```
+
+Horizontal ground speed is ~0 for the first 17 seconds because the vehicle is climbing straight up, and the deceleration at t=26.1s begins *before* the `handle_gps_degraded()` call at t~28.5s. So the "before" window straddled a slowdown the command did not cause. Two independent defects in the harness: the steady-cruise gate accepted a brief plateau inside a transient, and the measurement window was never validated after the fact.
+
+**Fixes to the harness** (`~/trials/speed_trial.py`; no product code changed):
+- Waypoints are now built from the vehicle's **actual home position read from `telemetry.home()`**, not hardcoded SITL-default coordinates. The real home this session was `47.397971, 8.546164` — the assumed default `47.397742, 8.545594` was ~65m off, which silently shortened the legs.
+- Legs lengthened to ~2km so a single leg outlasts climb-out plus both measurement windows. This matters because PX4 re-applies each mission item's own speed at every waypoint transition, which would clobber the `set_current_speed` override mid-measurement.
+- Each measurement window is **validated after the fact and rejected if invalid**: standard deviation must be < 0.30 m/s *and* `mission_progress` must not have advanced during the window (i.e. the vehicle did not reach a waypoint and turn). An invalid window is retried, never reported. This is the change that actually makes the number trustworthy, independent of any particular theory about what causes a transient.
+
+**Honest gap**: with the corrected harness the anomaly is gone, but the specific cause of that t=26.1s deceleration in the *discarded* runs was never positively identified — the waypoint was still ~475m away, so it was not waypoint arrival. It is not chased further because the post-hoc validity gate now rejects such windows outright rather than averaging through them. Flagging it rather than claiming a root cause that was not confirmed.
+
+**Result — isolated confirmation run, then a 5-trial batch** (fresh SITL per trial, launched as an independent process invocation per D14, `dataman` cleared each time):
+
+| trial | before (m/s) | after (m/s) | ratio | err vs commanded 2.5 |
+|-------|--------------|-------------|-------|----------------------|
+| iso   | 4.976 +/- 0.020 | 2.503 +/- 0.009 | 0.503 | 0.003 |
+| 1     | 4.963 +/- 0.008 | 2.503 +/- 0.015 | 0.504 | 0.003 |
+| 2     | 4.968 +/- 0.012 | 2.500 +/- 0.012 | 0.503 | 0.000 |
+| 3     | 4.966 +/- 0.015 | 2.500 +/- 0.010 | 0.503 | 0.000 |
+| 4     | 4.971 +/- 0.022 | 2.498 +/- 0.024 | 0.503 | 0.002 |
+| 5     | 4.978 +/- 0.018 | 2.493 +/- 0.015 | 0.501 | 0.007 |
+
+**5/5 PASS**, every window accepted on its first attempt (no retries needed — the vehicle was genuinely steady each time). Measured ratio 0.501-0.504 against the commanded `slow_down_speed_fraction = 0.5`, and the resulting speed lands within 0.007 m/s of the commanded 2.5 m/s. Within-window standard deviations of 0.008-0.024 m/s show these are real steady-state cruise measurements, not averages across a transient.
+
+**Conclusion**: `action.set_current_speed()` as wrapped by `GroundLinkVehicle.set_speed()` and driven by `handle_gps_degraded()` does change the vehicle's actual ground speed, promptly and to the commanded value. D12's open question is closed. Note the override is ephemeral (not persisted on the vehicle) and PX4 re-applies the mission item's speed at the next waypoint transition — so a sustained slow-down across multiple waypoints would need re-issuing, which is NOT currently done and is a real limitation worth addressing if the GPS-degraded state is expected to persist across waypoints.
+
+**Tooling note**: SITL console output is now discarded (`/dev/null`) by default in the trial launcher instead of being captured. PX4 emits ~250MB/min of cursor-redraw spam; ~21GB of such logs had accumulated from previous sessions and none of them ever diagnosed anything — the `.ulg` flight logs are the real diagnostic source (D10, D11). Old console logs were purged.
+
+---
+
+## D16 — RTL verified to complete the full return-and-land, not just the mode switch: 5/5
+
+D13 verified only that `FlightMode` reached `RETURN_TO_LAUNCH` within 15s and explicitly flagged the rest — whether the vehicle actually goes home and lands — as unverified, because the full sequence takes far longer than that test window. Closed now.
+
+**Test**: takeoff, fly outbound until genuinely away from home (gate: >= 100m horizontal distance *and* at cruise altitude, so "came back" is a meaningful claim), then `handle_battery_critical(15.0)` (below `rtl_below_percent=20`, above `land_immediately_below_percent=8`, so it takes the RTL branch). Then watch the whole sequence to termination against real position/altitude/armed telemetry — not the call's return value, not the mode alone:
+
+- `FlightMode` reaches `RETURN_TO_LAUNCH`
+- horizontal distance to the **actual home position read from `telemetry.home()`** shrinks to ~0
+- `rel_alt` drops to ~0
+- the vehicle **disarms on its own**
+
+Pass required all four, with `final_dist_to_home < 10m` and `final_alt < 1.0m`.
+
+**Isolated confirmation run** — the trace is a textbook RTL and worth keeping:
+
+```
+t=16-38s   dist 0 -> 102m, alt 14.8    outbound mission leg
+t=40s      RETURN_TO_LAUNCH engaged, alt starts climbing 16.8 -> 29.8
+t=50-70s   dist 102 -> 1.7m at alt ~29.8   (transit home at RTL altitude)
+t=72-96s   dist 0.0, alt 27.7 -> -0.1      (descent over home)
+t=100s     alt 0.0, ARMED=False            (landed and disarmed)
+```
+
+Note PX4 climbs to its RTL return altitude (~30m here) *before* transiting — the vehicle briefly moves further from home (max 108.9m vs 102.5m at command time) while it turns and climbs. Worth knowing: a naive "distance must decrease monotonically" check would have failed a perfectly correct RTL.
+
+**Batch result (5 trials, fresh SITL each, launched as an independent process invocation per D14): 5/5 PASS.**
+
+| trial | dist at RTL (m) | t to RTL mode (s) | t to disarm (s) | final dist home (m) | final alt (m) |
+|-------|-----------------|-------------------|-----------------|---------------------|---------------|
+| iso   | 102.5 | 1.0 | 62.1 | 0.0 | 0.03 |
+| 1     | 100.1 | 0.4 | 61.5 | 0.1 | 0.02 |
+| 2     | 102.4 | 1.0 | 62.1 | 0.0 | 0.04 |
+| 3     | 101.6 | 1.0 | 61.1 | 0.1 | 0.02 |
+| 4     | 102.3 | 1.0 | 61.1 | 0.0 | 0.01 |
+| 5     | 102.3 | 1.0 | 62.1 | 0.0 | -0.05 |
+
+Every trial returned to within 0.1m of home, landed to within 5cm of ground, and disarmed autonomously, in a tightly clustered 61.1-62.1s. The consistency across independent fresh-SITL trials is strong evidence this is the real, repeatable behavior rather than a lucky run.
+
+**Conclusion**: `handle_battery_critical()`'s RTL path delivers a complete return-and-land through to disarm. D13's open item is closed. Still not covered: RTL behavior when the return path itself crosses a no-fly zone (PX4's native RTL knows nothing about our zones) — a genuine design gap, not a test gap, and worth deciding on deliberately rather than discovering in flight.
+
+---
+
+## D17 — `resume_after_gps_recovery()` verified against live SITL: 5/5, and DESIGN.md's resume-vs-restart question is answered
+
+This method was completely untested — flagged in D12 as "same category of PX4 internal state transition risk as D11's bug, flagged rather than assumed safe." Treated with the same rigor as the original reroute handoff.
+
+**Two things under test**, one behavioural and one design:
+
+1. Does it work at all — after a GPS-degraded HOLD, does it actually put the vehicle back into MISSION mode and get it flying again?
+2. DESIGN.md's open empirical question: does a plain `start_mission()` **resume from the current mission item, or restart from item 0?** The answer decides whether `resume_after_gps_recovery()` is correct as written, or needs `set_current_mission_item()` first (i.e. `mavsdk_client.resume_mission_from`).
+
+**Live risk probed deliberately**: `resume_after_gps_recovery()` calls `vehicle.start_mission()` **directly**, bypassing `engine._start_mission_and_confirm_resumed()` — the wrapper that exists precisely because PX4 can silently reject the internal mode switch while MAVSDK reports success (D11). So the test never trusts the call's return value; it polls `FlightMode` and real position afterwards.
+
+**Test**: 4-waypoint mission (~155m legs). Fly until `mission_progress` reaches item 2, so "resume" has a meaningful place to resume *from*. Then `handle_gps_degraded(NO_FIX, 99.0, ...)` → confirm `HOLD` mode *and* that the vehicle actually stopped (ground speed, not just mode). Then `resume_after_gps_recovery()` → confirm MISSION mode, confirm it physically moves again, and — the strongest discriminator — confirm it **runs through to the final waypoint from the resumed point**. A restart-from-zero would also "move," so reaching the final item is what actually distinguishes the two.
+
+**Isolated confirmation run** trace, the interesting window:
+
+```
+t=48s  speed 5.00  MISSION prog=1
+t=49s  speed 4.75  HOLD    prog=2   <- degraded, decelerating
+t=55s  speed 0.03  HOLD    prog=2   <- fully stopped
+t=56s  speed 1.14  MISSION prog=2   <- resumed, mode back within ~1s
+t=58s  speed 4.98  MISSION prog=2   <- back at full cruise speed
+```
+
+**Batch result (5 trials, fresh SITL each, launched as an independent process invocation per D14): 5/5 PASS.**
+
+| trial | speed in HOLD (m/s) | t to MISSION mode (s) | progress at hold -> after resume | travelled after resume (m) | reached final wp | t to final wp (s) |
+|-------|---------------------|------------------------|----------------------------------|-----------------------------|------------------|--------------------|
+| 1 | 0.061 | 1.00 | 2 -> 2 | 150.4 | yes | 30.6 |
+| 2 | 0.067 | 1.00 | 2 -> 2 | 150.4 | yes | 30.6 |
+| 3 | 0.058 | 1.00 | 2 -> 2 | 147.8 | yes | 30.1 |
+| 4 | 0.063 | 1.01 | 2 -> 2 | 150.5 | yes | 30.5 |
+| 5 | 0.081 | 1.01 | 2 -> 2 | 145.4 | yes | 29.5 |
+
+**Answer to DESIGN.md's open question: plain `start_mission()` RESUMES from the current mission item — it does NOT restart from zero.** Mission progress was at item 2 when the HOLD was triggered and remained at item 2 after resume in all 5 trials (`min_progress_after_resume = 2` — progress never dipped at any point during the resume, so this isn't an artifact of sampling after a fast re-advance), then continued forward to the final waypoint in ~30s. `resume_after_gps_recovery()` is therefore **correct as written**; `mavsdk_client.resume_mission_from()` / `set_current_mission_item()` is not needed for this path. DESIGN.md should be updated to record the settled answer.
+
+**On the bypassed retry wrapper**: the mode switch succeeded on the first attempt in all 5 trials (~1.0s, no retries), so the D11 rejection race did not fire here. That is *not* evidence it cannot. The difference from D11's path is plausible — a plain resume involves no `pause`/`clear`/`upload` sequence beforehand, so there is far less PX4-internal state churn for the mode switch to race against — but "didn't happen in 5 trials" is weaker than "can't happen." **Recommendation (not applied here, since these runs measured the code as written and changing it would invalidate the measurement): route `resume_after_gps_recovery()` through `_start_mission_and_confirm_resumed()` for the same verify-don't-trust guarantee the reroute path has.** Cheap, strictly safer, and removes the one remaining place where a bare `start_mission()` return value is trusted.
+
+**Overnight verification status after D15-D17**: all three previously-open items are now measured against live SITL — `set_current_speed` effect (5/5, D15), RTL full return-and-land (5/5, D16), GPS-recovery resume (5/5, D17) — joining the reroute handoff (5/5, D14), GPS-degraded (5/5, D12), and battery-critical (10/10, D13).
