@@ -47,6 +47,16 @@ class EngineConfig:
     settle_timeout_s: float = 15.0
     settle_speed_epsilon_m_s: float = 0.3
     settle_required_consecutive: int = 3
+    adaptive_replanning_enabled: bool = True  # evaluation/DESIGN.md: the
+    # baseline-vs-adaptive comparison toggle. False collapses every
+    # trigger's response to a plain action.return_to_launch() -- context.md's
+    # own definition of the baseline ("a crude failsafe (Return-to-Launch)
+    # that abandons the mission entirely"), one uniform response, no
+    # severity tiers, no pathfinding. Detection (ConstraintMonitor
+    # thresholds, the no-fly-zone announcement trigger point) is completely
+    # unaffected by this flag -- only the response differs, which is what
+    # makes "identical injected failure scenarios" between conditions
+    # actually true rather than two differently-timed experiments.
 
 
 class ReplanningEngine:
@@ -99,12 +109,24 @@ class ReplanningEngine:
 
         if not result.succeeded:
             # no safe reroute exists -- fall back to RTL rather than getting
-            # stuck (DESIGN.md's edge-case handling)
+            # stuck (DESIGN.md's edge-case handling). Same action baseline
+            # would take anyway, so no adaptive_replanning_enabled branch
+            # needed here.
             await self.vehicle.return_to_launch()
             return self._event(
                 ReplanTrigger.NO_FLY_ZONE,
                 f"zone '{zone.label}' blocks remaining path, no safe reroute found ({result.reason})",
                 "rtl_fallback",
+                remaining,
+                [],
+            )
+
+        if not self.config.adaptive_replanning_enabled:
+            await self.vehicle.return_to_launch()
+            return self._event(
+                ReplanTrigger.NO_FLY_ZONE,
+                f"zone '{zone.label}' blocks remaining path (baseline: RTL instead of reroute)",
+                "baseline_rtl",
                 remaining,
                 [],
             )
@@ -134,6 +156,16 @@ class ReplanningEngine:
                 remaining,
             )
 
+        if not self.config.adaptive_replanning_enabled:
+            await self.vehicle.return_to_launch()
+            return self._event(
+                ReplanTrigger.BATTERY_CRITICAL,
+                f"battery {remaining_percent:.1f}% (baseline: RTL regardless of severity)",
+                "baseline_rtl",
+                remaining,
+                [],
+            )
+
         if action == BatteryAction.RETURN_TO_LAUNCH:
             await self.vehicle.return_to_launch()
             outcome = "rtl"
@@ -152,6 +184,15 @@ class ReplanningEngine:
 
         if action == GpsAction.CONTINUE_NORMAL:
             return self._event(ReplanTrigger.GPS_DEGRADED, reason + " nominal", "no_action", remaining, remaining)
+
+        if not self.config.adaptive_replanning_enabled:
+            # Deliberately not special-cased even though RTL is itself
+            # GPS-dependent and the injected failure here IS GPS -- per
+            # evaluation/DESIGN.md open question 2, this is meant to be
+            # observed and reported honestly, including outright RTL
+            # failure under degraded GPS, not engineered around.
+            await self.vehicle.return_to_launch()
+            return self._event(ReplanTrigger.GPS_DEGRADED, reason + " (baseline: RTL instead of slow/hold)", "baseline_rtl", remaining, [])
 
         if action == GpsAction.SLOW_DOWN:
             await self.vehicle.set_speed(nominal_speed_m_s * self.config.gps_thresholds.slow_down_speed_fraction)

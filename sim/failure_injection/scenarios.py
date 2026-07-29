@@ -161,3 +161,29 @@ async def apply_gps_degradation_scenario(vehicle: GroundLinkVehicle, scenario: G
 # fix (typically needs 4+), tripping GPS_FIX_DEGRADED, not just GPS_HDOP_HIGH.
 BATTERY_DRAIN_CRITICAL = BatteryDrainScenario(target_percent=12.0)
 GPS_DEGRADATION_LOW_SATS = GpsDegradationScenario(simulated_num_satellites=3)
+
+# evaluation/DESIGN.md open question 1: a second, more severe battery case
+# for the baseline-vs-adaptive comparison. BATTERY_DRAIN_CRITICAL's 12%
+# floor sits between BatteryResponseThresholds' land_immediately_below (8%)
+# and rtl_below (20%) either way, so BOTH conditions land on RTL there --
+# no timing divergence to measure.
+#
+# drain_interval_s=1.5 makes the 100%->5% traversal take about 1.4 real
+# seconds -- deliberately much faster than the battery telemetry channel's
+# own sample rate (observed ~0.3-0.5 Hz), so whichever sample first crosses
+# constraint_monitor's <=15% threshold should already be at or very near the
+# 5% floor, safely below the 8% land-immediately tier, rather than landing
+# ambiguously somewhere in the 8-15% band. This is NOT reliable if applied
+# at arm time, though: an early empirical run (decisions.md D22) applied it
+# before arming and caught 12% at first detection instead (still in the
+# RTL-choosing band) -- coarse per-sample jumps aren't perfectly
+# deterministic against exact telemetry timing, only "usually skips the
+# ambiguous band, not always". The scenario trial script instead applies
+# this fault only once the vehicle is already in steady cruise (same gate
+# firmware_link's speed/GPS scenario trials use), so even on the rare
+# sample that does land in the ambiguous band, the vehicle is genuinely
+# airborne and away from home when it happens -- not, as in that early
+# run, triggering RTL while still mid climb-out with nothing to "return"
+# from. See decisions.md D22 for the measured result after this fix.
+BATTERY_DRAIN_SEVERE = BatteryDrainScenario(target_percent=5.0, drain_interval_s=1.5)
+BATTERY_DRAIN_SEVERE = BatteryDrainScenario(target_percent=5.0, drain_interval_s=1.5)
