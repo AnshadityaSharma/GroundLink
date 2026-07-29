@@ -65,7 +65,10 @@ POST_CONFIRM_WATCH_S = 15.0
 
 state = {'lat': None, 'lon': None, 'alt': 0.0, 'mode': None, 'prog': 0}
 positions = []   # (t, lat, lon) -- every position sample, for zone-entry and completion checks
+full_series = []  # dashboard export: {t, lat, lon, alt, mode} per position tick
 T0 = {'v': 0.0}
+DETECT_T = {'v': None}
+REPLANNED = {'v': []}
 
 
 def dist_m(a, b, c, d):
@@ -87,6 +90,10 @@ async def pump_pos(v):
     async for p in v.drone.telemetry.position():
         state['lat'], state['lon'], state['alt'] = p.latitude_deg, p.longitude_deg, p.relative_altitude_m
         positions.append((time.monotonic() - T0['v'], p.latitude_deg, p.longitude_deg))
+        full_series.append({
+            't': round(time.monotonic() - T0['v'], 2), 'lat': p.latitude_deg, 'lon': p.longitude_deg,
+            'alt': round(p.relative_altitude_m, 2), 'mode': state['mode'],
+        })
 
 
 async def pump_mode(v):
@@ -110,6 +117,7 @@ def completion_percent(mission: Mission) -> dict:
 async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--baseline', action='store_true')
+    parser.add_argument('--export', default=None, help='write full-resolution flight data to this JSON path (for the dashboard)')
     args = parser.parse_args()
 
     out = {'ok': False, 'condition': 'baseline' if args.baseline else 'adaptive'}
@@ -161,6 +169,7 @@ async def main():
         out['t_to_announce_s'] = round(time.monotonic() - t_start, 2)
         out['progress_at_announce'] = state['prog']
         t_announce_rel = time.monotonic() - T0['v']
+        DETECT_T['v'] = t_announce_rel
 
         # Feed the REAL zone and REAL current position -- not a hardcoded
         # test position -- exactly as the real evaluation loop would.
@@ -174,6 +183,7 @@ async def main():
         ev = await engine.handle_no_fly_zone(scenario.zone, real_position)
         out['event_outcome'] = ev.outcome
         out['new_remaining_count'] = len(ev.new_remaining_waypoints)
+        REPLANNED['v'] = [{'lat': wp.latitude_deg, 'lon': wp.longitude_deg} for wp in ev.new_remaining_waypoints]
         t_cmd = time.monotonic()
 
         if ev.outcome == 'rerouted':
@@ -231,6 +241,28 @@ async def main():
     finally:
         for t_ in tasks:
             t_.cancel()
+
+    if args.export:
+        export = {
+            'scenario': 'no_fly_zone',
+            'condition': out.get('condition'),
+            'home': out.get('home'),
+            'mission': [
+                {'lat': wp.latitude_deg, 'lon': wp.longitude_deg, 'alt': wp.relative_altitude_m,
+                 'kind': wp.kind.name, 'label': wp.label}
+                for wp in mission.waypoints
+            ],
+            'zone_boundary': out.get('zone_boundary'),
+            'replanned_waypoints': REPLANNED['v'],
+            'event_outcome': out.get('event_outcome'),
+            't_to_announce_s': out.get('t_to_announce_s'),
+            't_replan_trigger': DETECT_T['v'],
+            'position_at_announce': out.get('position_at_announce'),
+            'series': full_series,
+        }
+        pathlib.Path(args.export).write_text(json.dumps(export))
+        print(f'EXPORTED {args.export} ({len(full_series)} samples)')
+
     print('RESULT ' + json.dumps(out))
 
 asyncio.run(main())

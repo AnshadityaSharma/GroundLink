@@ -73,8 +73,10 @@ STEADY_WINDOW_S = 5.0
 STEADY_STDEV_MAX = 0.25
 
 state = {'lat': None, 'lon': None, 'alt': 0.0, 'mode': None, 'speed': 0.0, 'armed': True}
+DETECT_T = {'v': None}  # set once detection fires; used by --export for the replan-trigger marker
 speed_samples = []   # (t_rel, speed) -- for the severe case's steady-cruise gate
 positions = []   # (t_rel, lat, lon) -- every position sample, for completion-% check
+full_series = []  # dashboard export: {t, lat, lon, alt, speed, mode} per position tick
 trace = []
 T0 = {'v': 0.0}
 ARM_T = {'v': None}
@@ -92,6 +94,10 @@ async def pump_pos(v):
     async for p in v.drone.telemetry.position():
         state['lat'], state['lon'], state['alt'] = p.latitude_deg, p.longitude_deg, p.relative_altitude_m
         positions.append((time.monotonic() - T0['v'], p.latitude_deg, p.longitude_deg))
+        full_series.append({
+            't': round(time.monotonic() - T0['v'], 2), 'lat': p.latitude_deg, 'lon': p.longitude_deg,
+            'alt': round(p.relative_altitude_m, 2), 'speed': round(state['speed'], 2), 'mode': state['mode'],
+        })
 
 
 async def pump_mode(v):
@@ -155,6 +161,7 @@ async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--baseline', action='store_true')
     parser.add_argument('--severity', choices=['moderate', 'severe'], default='moderate')
+    parser.add_argument('--export', default=None, help='write full-resolution flight data to this JSON path (for the dashboard)')
     args = parser.parse_args()
 
     scenario = BATTERY_DRAIN_SEVERE if args.severity == 'severe' else BATTERY_DRAIN_CRITICAL
@@ -237,6 +244,7 @@ async def main():
 
         out['detected_percent'] = detected.details['remaining_percent']
         t_detect = time.monotonic()
+        DETECT_T['v'] = t_detect - T0['v']
         out['t_to_detect_s'] = round(t_detect - ARM_T['v'], 1)
 
         # Feed the REAL detected value into the engine -- not a hardcoded
@@ -282,6 +290,28 @@ async def main():
         for t_ in tasks:
             t_.cancel()
     out['trace'] = trace
+
+    if args.export:
+        export = {
+            'scenario': 'battery_critical',
+            'condition': out.get('condition'),
+            'severity': out.get('severity'),
+            'home': out.get('home'),
+            'mission': [
+                {'lat': wp.latitude_deg, 'lon': wp.longitude_deg, 'alt': wp.relative_altitude_m,
+                 'kind': wp.kind.name, 'label': wp.label}
+                for wp in mission.waypoints
+            ],
+            'detected_percent': out.get('detected_percent'),
+            't_to_detect_s': out.get('t_to_detect_s'),
+            'event_outcome': out.get('event_outcome'),
+            't_replan_trigger': DETECT_T['v'],
+            't_to_safe_recovery_s': out.get('t_to_safe_recovery_s'),
+            'series': full_series,
+        }
+        pathlib.Path(args.export).write_text(json.dumps(export))
+        print(f'EXPORTED {args.export} ({len(full_series)} samples)')
+
     print('RESULT ' + json.dumps(out))
 
 asyncio.run(main())

@@ -58,8 +58,10 @@ BASELINE_RTL_WATCH_S = 45.0   # generous -- baseline's RTL-under-NO_FIX outcome 
 
 speed_samples = []
 positions = []   # (t_rel, lat, lon) -- for completion-% check
+full_series = []  # dashboard export: {t, lat, lon, alt, speed, mode} per position tick
 state = {'lat': None, 'lon': None, 'alt': 0.0, 'mode': None, 'speed': 0.0, 'gps_fix': None, 'gps_hdop': None}
 T0 = {'v': 0.0}
+DETECT_T = {'v': None}
 
 
 def dist_m(a, b, c, d):
@@ -80,6 +82,10 @@ async def pump_pos(v):
     async for p in v.drone.telemetry.position():
         state['lat'], state['lon'], state['alt'] = p.latitude_deg, p.longitude_deg, p.relative_altitude_m
         positions.append((time.monotonic() - T0['v'], p.latitude_deg, p.longitude_deg))
+        full_series.append({
+            't': round(time.monotonic() - T0['v'], 2), 'lat': p.latitude_deg, 'lon': p.longitude_deg,
+            'alt': round(p.relative_altitude_m, 2), 'speed': round(state['speed'], 2), 'mode': state['mode'],
+        })
 
 
 async def pump_mode(v):
@@ -118,6 +124,7 @@ def completion_percent(mission: Mission) -> dict:
 async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--baseline', action='store_true')
+    parser.add_argument('--export', default=None, help='write full-resolution flight data to this JSON path (for the dashboard)')
     args = parser.parse_args()
 
     out = {'ok': False, 'condition': 'baseline' if args.baseline else 'adaptive'}
@@ -174,6 +181,7 @@ async def main():
             raise RuntimeError('constraint_monitor never reported GPS_FIX_DEGRADED')
 
         t_detect = time.monotonic()
+        DETECT_T['v'] = t_detect - T0['v']
         out['t_to_detect_s'] = round(t_detect - t_inject, 2)
         out['detected_fix_type'] = detected.details['fix_type']
         out['detected_num_satellites'] = detected.details['num_satellites']
@@ -233,6 +241,27 @@ async def main():
     finally:
         for t_ in tasks:
             t_.cancel()
+
+    if args.export:
+        export = {
+            'scenario': 'gps_degraded',
+            'condition': out.get('condition'),
+            'home': out.get('home'),
+            'mission': [
+                {'lat': wp.latitude_deg, 'lon': wp.longitude_deg, 'alt': wp.relative_altitude_m,
+                 'kind': wp.kind.name, 'label': wp.label}
+                for wp in mission.waypoints
+            ],
+            'detected_fix_type': out.get('detected_fix_type'),
+            't_to_detect_s': out.get('t_to_detect_s'),
+            'event_outcome': out.get('event_outcome'),
+            't_replan_trigger': DETECT_T['v'],
+            't_to_safe_recovery_s': out.get('t_to_safe_recovery_s'),
+            'series': full_series,
+        }
+        pathlib.Path(args.export).write_text(json.dumps(export))
+        print(f'EXPORTED {args.export} ({len(full_series)} samples)')
+
     print('RESULT ' + json.dumps(out))
 
 asyncio.run(main())
