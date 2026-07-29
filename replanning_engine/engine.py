@@ -175,15 +175,15 @@ class ReplanningEngine:
         progress held at item 2 across the HOLD and resume, then ran on to
         the final waypoint.
 
-        Known gap: unlike _execute_handoff, this trusts start_mission()'s
-        return value instead of going through
-        _start_mission_and_confirm_resumed(). The mode switch succeeded
-        first try in all 5 trials (~1.0s), plausibly because a plain resume
-        involves none of the pause/clear/upload state churn the D11
-        rejection race needed -- but that is not proof it cannot happen.
-        Routing this through the confirm-and-retry wrapper is the safer
-        shape (see D17)."""
-        await self.vehicle.start_mission()
+        Goes through _start_mission_and_confirm_resumed() -- same
+        verify-don't-trust wrapper _execute_handoff uses -- rather than
+        trusting start_mission()'s return value directly. The mode switch
+        succeeded first try in all 5 of D17's trials, plausibly because a
+        plain resume involves none of the pause/clear/upload state churn
+        the D11 rejection race needed, but "didn't fail in 5 trials" isn't
+        proof it cannot -- see D18 for the re-verification after this
+        change."""
+        await self._start_mission_and_confirm_resumed()
         remaining = self.remaining_waypoints()
         return self._event(ReplanTrigger.GPS_DEGRADED, "gps recovered, resuming mission", "resumed", remaining, remaining)
 

@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
 """Live-SITL check: ReplanningEngine.resume_after_gps_recovery().
 
-Completely untested before this. Two things are being established:
+D17: originally untested entirely. Two things were established there:
 
 1. Does it work at all -- after a GPS-degraded HOLD, does calling it actually
    put the vehicle back into MISSION mode and get it flying again?
 2. DESIGN.md's open empirical question: does a plain start_mission() RESUME
-   from the current mission item, or RESTART the mission from item 0? The
-   answer decides whether resume_after_gps_recovery() is correct as written
-   or needs set_current_mission_item() first (mavsdk_client.resume_mission_from).
+   from the current mission item, or RESTART the mission from item 0?
+   Answered: it RESUMES. resume_after_gps_recovery() is correct as written
+   (set_current_mission_item()/resume_mission_from() is not needed).
 
-Live risk being probed deliberately: resume_after_gps_recovery() calls
-vehicle.start_mission() DIRECTLY, bypassing engine._start_mission_and_confirm_resumed().
-That wrapper exists because PX4 can silently reject the internal mode switch
-while MAVSDK reports success (D11). So this test never trusts the call's
-return -- it polls FlightMode and real position afterwards.
+D18: at D17 time, resume_after_gps_recovery() called vehicle.start_mission()
+DIRECTLY, bypassing engine._start_mission_and_confirm_resumed() -- the
+wrapper _execute_handoff uses because PX4 can silently reject the internal
+mode switch while MAVSDK reports success (D11). It now goes through that
+wrapper too. This script never trusted the call's return value regardless
+-- it polls FlightMode and real position afterwards either way -- so it
+serves as the re-verification for that change without needing to be
+rewritten.
 """
 import asyncio, json, math, pathlib, sys, time
 

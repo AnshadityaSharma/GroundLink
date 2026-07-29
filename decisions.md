@@ -332,3 +332,17 @@ t=58s  speed 4.98  MISSION prog=2   <- back at full cruise speed
 **On the bypassed retry wrapper**: the mode switch succeeded on the first attempt in all 5 trials (~1.0s, no retries), so the D11 rejection race did not fire here. That is *not* evidence it cannot. The difference from D11's path is plausible — a plain resume involves no `pause`/`clear`/`upload` sequence beforehand, so there is far less PX4-internal state churn for the mode switch to race against — but "didn't happen in 5 trials" is weaker than "can't happen." **Recommendation (not applied here, since these runs measured the code as written and changing it would invalidate the measurement): route `resume_after_gps_recovery()` through `_start_mission_and_confirm_resumed()` for the same verify-don't-trust guarantee the reroute path has.** Cheap, strictly safer, and removes the one remaining place where a bare `start_mission()` return value is trusted.
 
 **Overnight verification status after D15-D17**: all three previously-open items are now measured against live SITL — `set_current_speed` effect (5/5, D15), RTL full return-and-land (5/5, D16), GPS-recovery resume (5/5, D17) — joining the reroute handoff (5/5, D14), GPS-degraded (5/5, D12), and battery-critical (10/10, D13).
+
+---
+
+## D18 — `resume_after_gps_recovery()` routed through the confirm-and-retry wrapper (D17's flagged gap); re-verified 3/3
+
+D17 flagged that `resume_after_gps_recovery()` called `vehicle.start_mission()` directly, bypassing `_start_mission_and_confirm_resumed()` — the wrapper `_execute_handoff` uses because PX4 can silently reject the internal mode switch while MAVSDK reports success (D11). "Didn't fail in 5 trials" was explicitly not treated as proof it couldn't. Fix approved and applied: `resume_after_gps_recovery()` now calls `_start_mission_and_confirm_resumed()` instead of `vehicle.start_mission()` directly — same verify-and-retry-up-to-5x guarantee the reroute handoff already has.
+
+Unit/orchestration suite unaffected (77 passed — nothing in `tests/` exercises this specific call path against a real mode-switch race, by construction, since it's a hand-written vehicle stand-in).
+
+**Re-verification (3 trials, not a full new investigation — same script as D17, fresh SITL per trial launched as an independent process invocation): 3/3 PASS**, same shape of result as D17: progress held at item 2 through the HOLD and resume, travelled 144.6-150.3m afterward, reached the final waypoint at 29.5-30.6s. `t_to_mission_mode_s = 0.0` in all three trials, down from D17's ~1.0s — expected and correct, not a discrepancy: the wrapper itself now blocks until `FlightMode` confirms `MISSION` before `resume_after_gps_recovery()` returns, so the trial script's own poll (which starts after the call returns) finds the mode already confirmed.
+
+**Conclusion**: the one remaining "trusts the return value" gap flagged in D17 is closed. Every MAVSDK mode-transition call in the replan handoff path (`_execute_handoff`'s resume, and now the GPS-recovery resume) goes through the same confirm-and-retry discipline.
+
+**Left alone, per explicit instruction**: the unexplained t~26s deceleration anomaly from the discarded pre-fix speed-measurement runs (D15). The post-hoc validity gate already handles it correctly by rejecting such windows; not chased further.
