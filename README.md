@@ -31,12 +31,13 @@ Built on **PX4** (via **MAVSDK-Python**), validated in **SITL** (Software-In-The
 | `mission_planner` — waypoint model + lawnmower coverage-grid generator | ✅ Built, tested (7 tests) |
 | `constraint_monitor` — battery/GPS/geofence threshold checks, structured violation events | ✅ Built, tested (10 tests) |
 | `firmware_link` — MAVSDK integration: connect/arm/upload/telemetry | ✅ Built, verified against real PX4 SITL (8/8 trials, no flakiness — see [decisions.md D10](decisions.md)) |
-| `replanning_engine` — battery-critical return, GPS-degraded downgrade | ✅ Built, verified against real PX4 SITL (10/10 and 5/5 trials — see [decisions.md D12](decisions.md)/[D13](decisions.md)). Effects verified too, not just the commands: `set_current_speed` measurably halves real ground speed (5/5, [D15](decisions.md)), RTL completes the full return-and-land through to autonomous disarm (5/5, [D16](decisions.md)), and GPS-recovery resume continues from the current waypoint (5/5, [D17](decisions.md)) |
+| `replanning_engine` — battery-critical return, GPS-degraded downgrade | ✅ Built, verified against real PX4 SITL (10/10 and 5/5 trials — see [decisions.md D12](decisions.md)/[D13](decisions.md)). Effects verified too, not just the commands: `set_current_speed` measurably halves real ground speed (5/5, [D15](decisions.md)), RTL completes the full return-and-land through to autonomous disarm (5/5, [D16](decisions.md)), and GPS-recovery resume continues from the current waypoint and is routed through the same confirm-and-retry guarantee as the reroute handoff (5/5, [D17](decisions.md)/[D18](decisions.md)) |
 | `replanning_engine` — no-fly-zone reroute (grid A*) | ✅ Built, verified against real PX4 SITL (5/5 trials, each reaching the final waypoint in ~27s). The earlier 0/5 batch was diagnosed as a test-harness artifact, not a code flaw — see [decisions.md D14](decisions.md) |
-| `sim/failure_injection` — battery/GPS/no-fly-zone scenario configs | ✅ Built (real PX4 SITL params), unit-tested; live-SITL injection itself not yet verified |
-| `dashboard` — live Streamlit ground station | ⬜ Not started |
+| `sim/failure_injection` — battery/GPS/no-fly-zone scenario configs | ✅ Built (real PX4 SITL params) and verified end-to-end against live SITL through the real detection→replan→execute trigger chain for all three scenarios — see [decisions.md D19-D21](decisions.md) |
+| `evaluation` — baseline-vs-adaptive comparison | ✅ Implemented and measured: 40 real SITL trials across 8 conditions. Results in [evaluation/RESULTS.md](evaluation/RESULTS.md); full methodology and findings (including baseline's GPS-loss RTL failing 0/5) in [decisions.md D22](decisions.md) |
+| `dashboard` — recorded-flight presentation dashboard | ✅ Built: single self-contained offline HTML file (`dashboard/index.html`) replaying real recorded SITL flights, with playback controls (scrub/play/speed), layer toggles, and an adaptive-vs-baseline comparison view. See [run.md](run.md) to open it |
 
-See [replanning_engine/DESIGN.md](replanning_engine/DESIGN.md) for the design and decisions.md D8-D13 for the full, honest verification history — including the parts that are confirmed vs. still open.
+See [replanning_engine/DESIGN.md](replanning_engine/DESIGN.md) and [run.md](run.md) for how to run any of this yourself; decisions.md D8-D22 has the full, honest verification history — including the parts that are confirmed vs. still open.
 
 Every claim of "verified" or "tested" in this repo means it was actually run against a real PX4 SITL instance, not mocked — that's a deliberate project convention (see `context.md`). Where something hasn't been tested, this README says so explicitly.
 
@@ -57,13 +58,15 @@ constraint_monitor/    Pure function: (Thresholds, TelemetrySnapshot) -> list of
                        against a live stream or a replayed log file.
         |
         v
-replanning_engine/     [in design] Consumes ViolationEvents, recomputes the
-                       remaining mission (reroute around no-fly zones, safe
-                       return on critical battery, conservative mode on GPS
+replanning_engine/     Consumes ViolationEvents, recomputes the remaining
+                       mission (reroute around no-fly zones, safe return on
+                       critical battery, conservative mode on GPS
                        degradation), hands the new plan back to firmware_link.
         |
         v
-dashboard/             [not started] Streamlit UI: live map, telemetry, replan log.
+dashboard/             Self-contained offline HTML replay dashboard: map,
+                       playback controls, and adaptive-vs-baseline comparison
+                       over real recorded SITL flights (see run.md).
 ```
 
 The layering is deliberate: `replanning_engine` depends only on `mission_planner` and `constraint_monitor` types, never on MAVSDK directly — the MAVLink layer could be swapped (e.g. for pymavlink, or ArduPilot) without touching planning/replanning logic.
@@ -198,10 +201,10 @@ GroundLink/
   mission_planner/      Waypoint + Mission dataclasses, lawnmower grid generator
   firmware_link/         MAVSDK integration layer (the only package that imports mavsdk)
   constraint_monitor/    Battery/GPS/geofence threshold checks -> structured events
-  replanning_engine/     Core novelty: live mission reroute on constraint violation
-                         (in design -- see replanning_engine/DESIGN.md)
-  dashboard/             Streamlit ground station UI (not started)
-  sim/                   SITL launch script, failure-injection configs (planned)
+  replanning_engine/     Core novelty: live mission reroute on constraint violation,
+                         verified against real PX4 SITL -- see replanning_engine/DESIGN.md
+  dashboard/             Self-contained offline HTML replay dashboard
+  sim/                   SITL launch script, failure-injection configs, trial scripts
   tests/                 pytest suite + fixtures (e.g. a sample telemetry replay log)
   context.md             Full problem statement, objectives, tech stack
   decisions.md           Dated log of every architectural decision and bug found
@@ -210,7 +213,7 @@ GroundLink/
 - **`mission_planner/`** — firmware-agnostic mission representation (`Waypoint`, `Mission`) and `generate_lawnmower_mission()`, a boustrophedon coverage-grid generator over a boundary polygon.
 - **`firmware_link/`** — the only place MAVSDK is imported. Defines `TelemetrySnapshot` and friends (vehicle-agnostic dataclasses the rest of the codebase depends on instead of MAVSDK types directly) and `GroundLinkVehicle`, a thin async wrapper for connect/arm/upload-mission/stream-telemetry.
 - **`constraint_monitor/`** — `ConstraintMonitor.check()` is a pure function of `(Thresholds, TelemetrySnapshot) -> list[ViolationEvent]`. Works identically against a live MAVSDK stream (`.watch()`) or a replayed JSONL log (`.replay()` / `log_replay.load_snapshots_jsonl()`). Violations are structured `ViolationEvent` objects (kind/severity/message/details), not print statements.
-- **`replanning_engine/`** — not implemented yet; see [replanning_engine/DESIGN.md](replanning_engine/DESIGN.md) for the approach.
+- **`replanning_engine/`** — battery-critical, GPS-degraded, and no-fly-zone reroute responses, all verified against real PX4 SITL; see [replanning_engine/DESIGN.md](replanning_engine/DESIGN.md) for the approach and decisions.md D11-D18 for verification.
 - **`sim/launch_sitl.sh`** — the correct way to start SITL (see [Running the system](#running-the-system) above for why it's not just a bare `make` command).
 - **`tests/`** — pytest suite; `tests/fixtures/` holds replay data.
 
