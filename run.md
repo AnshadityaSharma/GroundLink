@@ -47,25 +47,43 @@ Full step-by-step install instructions for all of this are in [`README.md`](READ
 
 ### Exact commands to run one scenario
 
-Open a WSL2 Ubuntu terminal (or a regular terminal if on native Linux/macOS), then:
+These are the **exact, tested commands for this machine** — copy-paste them one at a time into a fresh WSL2 Ubuntu terminal, starting from `~` with nothing else active. Every line below was actually executed (not guessed) to confirm it works: the repo path, the venv name, the SITL launch, and a full live scenario run (GPS, both adaptive and `--baseline`) were all run start-to-finish and produced a real `RESULT` line.
 
-**Step 1 — start the simulator:**
+**Step 1 — go to the repo root:**
+
+```bash
+cd /mnt/c/Users/Admin/Desktop/drones_project
+```
+
+That's the WSL-side path to this specific checkout (Windows path `C:\Users\Admin\Desktop\drones_project`, exposed under WSL's `/mnt/c/...` mount).
+
+**Step 2 — activate the Python environment:**
+
+```bash
+source ~/groundlink-venv/bin/activate
+```
+
+Confirmed the venv exists at `~/groundlink-venv` and has this project installed editable (`pip list` shows `groundlink 0.1.0 ... /mnt/c/Users/Admin/Desktop/drones_project`).
+
+**Step 3 — start the simulator:**
 
 ```bash
 bash sim/trials/launch_sitl_bg.sh
 ```
 
-This starts the simulator in the background and returns control to you once it's ready — no need to open a second window for it.
+Confirmed present at `sim/trials/launch_sitl_bg.sh` (nothing moved). Takes ~20–30s, prints `SITL_UP`, then returns control to your prompt — no second window needed. If it ever prints `SITL_FAILED_TO_START` instead, something's wrong with the PX4 build at `~/PX4-Autopilot` (confirmed present and built on this machine at `~/PX4-Autopilot/build/px4_sitl_default/bin/px4`).
 
-**Step 2 — activate the Python environment and run a scenario:**
+**Step 4 — run a scenario:**
 
 ```bash
-source ~/groundlink-venv/bin/activate
-cd /path/to/GroundLink          # wherever you cloned this repo
 python sim/trials/gps_scenario_trial.py
 ```
 
-You'll see live progress printed to the screen, ending in a line starting with `RESULT` that summarizes what happened (detection time, what GroundLink decided to do, and whether it worked).
+You'll see live progress printed to the screen, ending in a line starting with `RESULT` that summarizes what happened (detection time, what GroundLink decided to do, and whether it worked). Actual tested output looked like:
+
+```
+RESULT {"ok": true, "condition": "adaptive", ..., "event_outcome": "hold", ..., "safe_confirmed": true, ...}
+```
 
 There are three scenario scripts you can run this way — swap the last command for whichever one you want to watch:
 
@@ -74,6 +92,14 @@ There are three scenario scripts you can run this way — swap the last command 
 | `sim/trials/battery_scenario_trial.py` | Drone flies out, its battery is drained to a critical level mid-flight, and it responds (returns home, or lands immediately if severe) |
 | `sim/trials/gps_scenario_trial.py` | Drone flies out, GPS signal is cut mid-flight, and it holds its position rather than trying to navigate blind |
 | `sim/trials/nfz_scenario_trial.py` | Drone flies a survey pattern, a restricted zone appears mid-survey, and it reroutes around it instead of abandoning the job |
+
+**Step 5 — clean up before running another scenario (or when you're done):**
+
+```bash
+pkill -9 -f "bin/px4"; pkill -9 -f "gz sim"; pkill -9 -f "mavsdk_server"
+```
+
+This is the same cleanup `launch_sitl_bg.sh` itself runs before every fresh launch (see the script). **You must run this — or just re-run Step 3, which does it for you — before starting another scenario in the same session**, per D19: PX4 persists parameter changes to disk and will silently carry a fault (like a forced GPS or battery failure) into the next "fresh" boot otherwise. To go again: repeat from Step 3.
 
 ### How long each one takes
 
@@ -91,7 +117,7 @@ These are honest numbers, measured from dozens of real runs during development (
 
 ## 3. Run with custom parameters (no code editing required)
 
-Each of the three scenario scripts accepts command-line flags so you can choose different conditions without opening any code.
+Each of the three scenario scripts accepts command-line flags so you can choose different conditions without opening any code. The flag tables below are the exact, live-tested `--help` output for each script on this machine (not transcribed from memory). `battery_scenario_trial.py --severity severe --baseline --export <path>` and `gps_scenario_trial.py --baseline` were both run start-to-finish and produced real results (the battery run exported 4047 samples to the JSON file).
 
 ### Battery-critical scenario — `sim/trials/battery_scenario_trial.py`
 
