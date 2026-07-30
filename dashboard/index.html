@@ -157,6 +157,35 @@ body{
 .sel-btn[aria-selected="true"]{ color:var(--ink); }
 .sel-btn:hover{ color:var(--ink-2); }
 
+/* ---------- headline callout: strongest single finding, always visible -- */
+.callout{
+  display:flex; align-items:center; gap:16px; flex-wrap:wrap;
+  border:1px solid var(--alert); border-radius:var(--r-lg);
+  background:var(--alert-soft); padding:14px 18px; margin:18px 0 0;
+}
+.callout-icon{
+  width:30px; height:30px; flex:none; border-radius:50%;
+  background:var(--alert); color:var(--ground); display:grid; place-items:center;
+}
+.callout-icon svg{ width:16px; height:16px; display:block; }
+.callout-body{ flex:1 1 320px; min-width:0; }
+.callout-kicker{
+  font-family:var(--mono); font-size:9.5px; letter-spacing:.14em; text-transform:uppercase;
+  color:var(--alert); margin-bottom:4px; font-weight:600;
+}
+.callout-text{ margin:0; font-size:13px; line-height:1.55; color:var(--ink); max-width:74ch; }
+.callout-text strong{ font-weight:700; }
+.callout-action{
+  appearance:none; cursor:pointer; flex:none; white-space:nowrap;
+  font-family:var(--mono); font-size:11px; letter-spacing:.05em;
+  color:var(--ground); background:var(--alert); border:1px solid var(--alert);
+  border-radius:100px; padding:9px 16px; transition:opacity .16s;
+}
+.callout-action:hover{ opacity:.85; }
+.callout-action[aria-current="true"]{
+  background:transparent; color:var(--alert);
+}
+
 /* ---------- verdict band (largest type on the page) --------------------- */
 .verdict{
   border:1px solid var(--rule); border-radius:var(--r-lg); background:var(--surface);
@@ -368,6 +397,17 @@ footer.colophon{
     </div>
   </header>
 
+  <div class="callout" id="gpsCallout">
+    <div class="callout-icon">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+    </div>
+    <div class="callout-body">
+      <div class="callout-kicker">Strongest result in this evaluation</div>
+      <p class="callout-text"><strong>Baseline fails outright here:</strong> when GPS drops out, the baseline's only response &mdash; return-to-launch &mdash; depends on the exact signal that just failed. PX4 accepts the command, then silently overrides it to LAND within seconds, and distance to home does not reliably close. <strong>0 of 5</strong> baseline flights reached a confirmed safe state, versus <strong>5 of 5</strong> for GroundLink, which holds position instead of trusting a position estimate it can no longer verify.</p>
+    </div>
+    <button type="button" class="callout-action" id="calloutJump">View this scenario &rarr;</button>
+  </div>
+
   <div class="selector" role="tablist" aria-label="Failure scenario" id="selector">
     <div class="sel-indicator" id="selIndicator" aria-hidden="true"></div>
   </div>
@@ -486,6 +526,18 @@ function localXY(lat, lon, oLat, oLon){
 /* ---- scenario copy + headline metrics (all figures from evaluation/RESULTS.md) */
 const SCENARIOS = [
   {
+    key:'gps_degraded', label:'GPS degraded', mapTitle:'Cruise &mdash; GPS fix lost mid-leg',
+    brief:'The GPS fix drops out mid-cruise. <strong>GroundLink holds position immediately</strong> rather than navigating on a position estimate it can no longer trust. '
+        + 'The baseline reaches for return-to-launch, which is the one response that cannot work here &mdash; returning home depends on the fix that just failed.',
+    headline:{
+      eyebrow:'Measured outcome — GPS dropout',
+      metric:'Flights that reached a confirmed safe state',
+      adaptive:'5/5', baseline:'0/5',
+      delta:'Baseline never recovered',
+      foot:'Five trials per condition. In every baseline flight PX4 accepted the return-to-launch command, then overrode it to LAND within about five seconds, and distance to home did not close.'
+    }
+  },
+  {
     key:'no_fly_zone', label:'No-fly zone', mapTitle:'Coverage sweep &mdash; zone appears mid-flight',
     brief:'A restricted zone is announced partway through a coverage sweep, straddling one row of the pattern. '
         + '<strong>GroundLink detects that the zone blocks the remaining route, plans a detour around it, and finishes the sweep.</strong> '
@@ -509,18 +561,6 @@ const SCENARIOS = [
       adaptive:'19.8s', baseline:'51.3s',
       delta:'2.6× faster to safe',
       foot:'Five trials per condition. GroundLink lands immediately at this severity; the baseline attempts a full return-to-launch regardless of how little charge is left.'
-    }
-  },
-  {
-    key:'gps_degraded', label:'GPS degraded', mapTitle:'Cruise &mdash; GPS fix lost mid-leg',
-    brief:'The GPS fix drops out mid-cruise. <strong>GroundLink holds position immediately</strong> rather than navigating on a position estimate it can no longer trust. '
-        + 'The baseline reaches for return-to-launch, which is the one response that cannot work here &mdash; returning home depends on the fix that just failed.',
-    headline:{
-      eyebrow:'Measured outcome — GPS dropout',
-      metric:'Flights that reached a confirmed safe state',
-      adaptive:'5/5', baseline:'0/5',
-      delta:'Baseline never recovered',
-      foot:'Five trials per condition. In every baseline flight PX4 accepted the return-to-launch command, then overrode it to LAND within about five seconds, and distance to home did not close.'
     }
   }
 ];
@@ -908,6 +948,10 @@ function select(key){
     if (on) placeIndicator(b);
   });
 
+  const onGps = key === 'gps_degraded';
+  S.nodes.calloutJump.setAttribute('aria-current', onGps ? 'true' : 'false');
+  S.nodes.calloutJump.textContent = onGps ? 'Currently showing' : 'View this scenario →';
+
   drawChart();
   renderTimeline();
   render();
@@ -934,6 +978,7 @@ function placeIndicator(btn){
     roAlt: document.getElementById('roAlt'),
     roMode: document.getElementById('roMode'),
     roTime: document.getElementById('roTime'),
+    calloutJump: document.getElementById('calloutJump'),
     roState: document.getElementById('roState'),
   };
 
@@ -1008,8 +1053,10 @@ function placeIndicator(btn){
     if (on) placeIndicator(on);
   });
 
+  S.nodes.calloutJump.addEventListener('click', () => select('gps_degraded'));
+
   renderMatrix();
-  select('no_fly_zone');
+  select('gps_degraded');
 })();
 </script>
 </body>
