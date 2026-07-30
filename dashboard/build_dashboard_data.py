@@ -2,7 +2,14 @@
 """Consolidate the three raw scenario exports (dashboard/data/*.json,
 produced by sim/trials/*_scenario_trial.py --export) plus
 evaluation/RESULTS.md's comparison numbers into one dashboard/data/flight_data.json
-the presentation dashboard loads.
+the presentation dashboard loads, then renders dashboard/index.html from
+dashboard/index.html.template by substituting that JSON in.
+
+index.html is a build artifact -- edit index.html.template and re-run this
+script. Doing both steps here is deliberate: the dashboard has to stay one
+self-contained offline file, so the data is inlined rather than fetched,
+and if the substitution lived outside this script the template and the
+built file could silently drift apart.
 
 Downsamples each scenario's position series to a manageable size for a
 smooth browser animation (real telemetry ticks faster than the vehicle
@@ -21,6 +28,9 @@ HERE = Path(__file__).resolve().parent
 DATA_DIR = HERE / 'data'
 RESULTS_MD = HERE.parent / 'evaluation' / 'RESULTS.md'
 OUT = DATA_DIR / 'flight_data.json'
+TEMPLATE = HERE / 'index.html.template'
+INDEX_HTML = HERE / 'index.html'
+PLACEHOLDER = '__FLIGHT_DATA__'
 
 BUCKET_S = 0.6
 
@@ -67,6 +77,26 @@ def parse_results_md(path):
     return groups
 
 
+def render_index(flight_data_json):
+    """Inline the flight data into the template to produce index.html.
+
+    newline='' on both ends so the template's own line endings survive
+    verbatim instead of being rewritten to CRLF on Windows -- otherwise
+    every build on a Windows checkout shows up as a whole-file diff.
+    """
+    with TEMPLATE.open(encoding='utf-8', newline='') as fh:
+        template = fh.read()
+    count = template.count(PLACEHOLDER)
+    if count != 1:
+        raise SystemExit(
+            f'expected exactly one {PLACEHOLDER} in {TEMPLATE.name}, found {count}'
+        )
+    html = template.replace(PLACEHOLDER, flight_data_json)
+    with INDEX_HTML.open('w', encoding='utf-8', newline='') as fh:
+        fh.write(html)
+    return html
+
+
 def main():
     scenarios = {}
     for name, filename in (
@@ -82,8 +112,12 @@ def main():
 
     comparison = parse_results_md(RESULTS_MD)
 
-    OUT.write_text(json.dumps({'scenarios': scenarios, 'comparison': comparison}))
+    flight_data_json = json.dumps({'scenarios': scenarios, 'comparison': comparison})
+    OUT.write_text(flight_data_json)
     print(f'wrote {OUT} ({OUT.stat().st_size} bytes)')
+
+    render_index(flight_data_json)
+    print(f'wrote {INDEX_HTML} ({INDEX_HTML.stat().st_size} bytes)')
 
 
 if __name__ == '__main__':

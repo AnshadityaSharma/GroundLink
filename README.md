@@ -69,6 +69,12 @@ dashboard/             Self-contained offline HTML replay dashboard: map,
                        over real recorded SITL flights (see run.md).
 ```
 
+`dashboard/index.html` is a **generated file** — it is `index.html.template` with the recorded flight data inlined, so the dashboard stays one self-contained offline file. Edit the template, then regenerate both it and `data/flight_data.json` with:
+
+```bash
+python dashboard/build_dashboard_data.py
+```
+
 The layering is deliberate: `replanning_engine` depends only on `mission_planner` and `constraint_monitor` types, never on MAVSDK directly — the MAVLink layer could be swapped (e.g. for pymavlink, or ArduPilot) without touching planning/replanning logic.
 
 ## Getting started
