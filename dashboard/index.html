@@ -5,865 +5,1012 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GroundLink — Flight Replay</title>
 <style>
+/* ==========================================================================
+   GroundLink flight replay
+   Visual language borrowed from avionics navigation displays: magenta is the
+   active flight-plan leg (as on every real GPS navigator), amber is the
+   original planned route, red is restricted airspace. Dashed = a plan,
+   solid = actually flown. Day/Night are the two modes a real cockpit
+   display ships with, so both themes are first-class here.
+   ========================================================================== */
+
+:root{
+  color-scheme: dark;
+  /* neutrals: blue-biased, chosen rather than inherited */
+  --ground:#0A0F16;
+  --ground-2:#070B11;
+  --surface:#111927;
+  --surface-2:#161F2E;
+  --rule:#1D2736;
+  --rule-soft:#161E2B;
+  --ink:#E6ECF5;
+  --ink-2:#8494AB;
+  --ink-3:#5A6880;
+  /* signal colours */
+  --active:#FF3D88;      /* flown / active leg */
+  --active-soft:rgba(255,61,136,.16);
+  --planned:#E0A93C;     /* original planned route, caution */
+  --planned-soft:rgba(224,169,60,.15);
+  --alert:#FF5B5B;       /* restricted airspace */
+  --alert-soft:rgba(255,91,91,.13);
+  --ok:#35D08A;
+  /* map surface */
+  --map-bg:#080C13;
+  --map-grid:#131C2A;
+  --map-ring:#1A2536;
+  --map-ring-ink:#3C4A60;
+
+  --mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+
+  --r-lg:10px; --r-md:7px; --r-sm:5px;
+  --pad:20px;
+}
+
+@media (prefers-color-scheme: light){
   :root{
-    --bg:#080b11;
-    --bg-1:#0d1119;
-    --panel:#10141d;
-    --panel-2:#141a25;
-    --border:#212838;
-    --border-soft:#1a2030;
-    --text-0:#f3f6fa;
-    --text-1:#aab3c5;
-    --text-2:#6c7690;
-    --cyan:#3ee6c8;
-    --cyan-dim:#1f7c6d;
-    --amber:#f0a840;
-    --amber-dim:#8a6428;
-    --violet:#9b8cfb;
-    --red:#ff6161;
-    --green:#4fd68a;
-    --mono: "SF Mono", "Cascadia Code", "Consolas", ui-monospace, monospace;
-    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
-    --radius: 14px;
-    --radius-sm: 9px;
+    color-scheme: light;
+    --ground:#E9EDF2; --ground-2:#DFE5ED;
+    --surface:#FFFFFF; --surface-2:#F4F7FA;
+    --rule:#C9D2DE; --rule-soft:#DCE3EC;
+    --ink:#0E1620; --ink-2:#55637A; --ink-3:#7B889C;
+    --active:#D6206B; --active-soft:rgba(214,32,107,.12);
+    --planned:#A9761A; --planned-soft:rgba(169,118,26,.14);
+    --alert:#D62828; --alert-soft:rgba(214,40,40,.10);
+    --ok:#127A49;
+    --map-bg:#F2F5F9; --map-grid:#DDE4EE; --map-ring:#CBD5E2; --map-ring-ink:#94A3B8;
   }
-  *{box-sizing:border-box;}
-  html,body{height:100%;}
-  body{
-    margin:0;
-    background:
-      radial-gradient(1200px 700px at 12% -10%, #101c26 0%, transparent 60%),
-      radial-gradient(1000px 600px at 100% 0%, #1a1430 0%, transparent 55%),
-      var(--bg);
-    color:var(--text-0);
-    font-family:var(--sans);
-    -webkit-font-smoothing:antialiased;
-    overflow-x:hidden;
-  }
-  ::selection{ background:var(--cyan-dim); color:#fff; }
-  ::-webkit-scrollbar{ width:9px; height:9px; }
-  ::-webkit-scrollbar-track{ background:transparent; }
-  ::-webkit-scrollbar-thumb{ background:var(--border); border-radius:6px; }
+}
+:root[data-theme="light"]{
+  color-scheme: light;
+  --ground:#E9EDF2; --ground-2:#DFE5ED;
+  --surface:#FFFFFF; --surface-2:#F4F7FA;
+  --rule:#C9D2DE; --rule-soft:#DCE3EC;
+  --ink:#0E1620; --ink-2:#55637A; --ink-3:#7B889C;
+  --active:#D6206B; --active-soft:rgba(214,32,107,.12);
+  --planned:#A9761A; --planned-soft:rgba(169,118,26,.14);
+  --alert:#D62828; --alert-soft:rgba(214,40,40,.10);
+  --ok:#127A49;
+  --map-bg:#F2F5F9; --map-grid:#DDE4EE; --map-ring:#CBD5E2; --map-ring-ink:#94A3B8;
+}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --ground:#0A0F16; --ground-2:#070B11;
+  --surface:#111927; --surface-2:#161F2E;
+  --rule:#1D2736; --rule-soft:#161E2B;
+  --ink:#E6ECF5; --ink-2:#8494AB; --ink-3:#5A6880;
+  --active:#FF3D88; --active-soft:rgba(255,61,136,.16);
+  --planned:#E0A93C; --planned-soft:rgba(224,169,60,.15);
+  --alert:#FF5B5B; --alert-soft:rgba(255,91,91,.13);
+  --ok:#35D08A;
+  --map-bg:#080C13; --map-grid:#131C2A; --map-ring:#1A2536; --map-ring-ink:#3C4A60;
+}
 
-  .shell{ max-width:1500px; margin:0 auto; padding:28px 32px 60px; }
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{
+  background:var(--ground);
+  color:var(--ink);
+  font-family:var(--sans);
+  font-size:14px;
+  line-height:1.5;
+  -webkit-font-smoothing:antialiased;
+}
+::selection{background:var(--active); color:#fff;}
+:focus-visible{ outline:2px solid var(--active); outline-offset:2px; border-radius:3px; }
 
-  /* ---------- header ---------- */
-  header.top{
-    display:flex; align-items:flex-end; justify-content:space-between;
-    margin-bottom:22px; gap:24px; flex-wrap:wrap;
-  }
-  .brand{ display:flex; align-items:center; gap:14px; }
-  .brand-mark{
-    width:40px; height:40px; border-radius:11px;
-    background:linear-gradient(145deg, var(--cyan) 0%, #1c8f92 100%);
-    display:flex; align-items:center; justify-content:center;
-    box-shadow:0 0 0 1px rgba(62,230,200,.25), 0 8px 24px -8px rgba(62,230,200,.45);
-    flex-shrink:0;
-  }
-  .brand-mark svg{ width:22px; height:22px; }
-  .brand h1{
-    font-size:19px; font-weight:650; letter-spacing:-.01em; margin:0; line-height:1.15;
-  }
-  .brand p{ margin:2px 0 0; font-size:12.5px; color:var(--text-2); letter-spacing:.01em; }
-  .top-right{ display:flex; align-items:center; gap:10px; }
-  .badge{
-    font-family:var(--mono); font-size:11px; letter-spacing:.03em;
-    color:var(--text-1); background:var(--panel); border:1px solid var(--border);
-    padding:6px 11px; border-radius:100px; display:flex; align-items:center; gap:7px;
-  }
-  .badge .dot{ width:6px; height:6px; border-radius:50%; background:var(--green); box-shadow:0 0 8px var(--green); }
+.shell{ max-width:1440px; margin:0 auto; padding:0 26px 56px; }
 
-  /* ---------- scenario tabs ---------- */
-  .tabs{
-    display:flex; gap:6px; background:var(--panel); border:1px solid var(--border);
-    padding:5px; border-radius:12px; margin-bottom:20px; width:fit-content;
-  }
-  .tab{
-    appearance:none; border:none; background:transparent; color:var(--text-1);
-    font-family:var(--sans); font-size:13px; font-weight:560; letter-spacing:.005em;
-    padding:9px 18px; border-radius:9px; cursor:pointer; transition:color .2s ease;
-    position:relative; white-space:nowrap;
-  }
-  .tab.active{ color:#04120f; }
-  .tab-indicator{
-    position:absolute; top:5px; bottom:5px; border-radius:9px;
-    background:linear-gradient(135deg, var(--cyan), #29b39d);
-    box-shadow:0 4px 16px -4px rgba(62,230,200,.55);
-    transition:left .32s cubic-bezier(.65,0,.35,1), width .32s cubic-bezier(.65,0,.35,1);
-    z-index:0;
-  }
-  .tab span{ position:relative; z-index:1; }
+/* ---------- header ---------------------------------------------------- */
+.masthead{
+  display:flex; align-items:center; justify-content:space-between; gap:20px;
+  padding:18px 0 16px; border-bottom:1px solid var(--rule);
+  flex-wrap:wrap;
+}
+.ident{ display:flex; align-items:center; gap:12px; min-width:0; }
+.ident-mark{
+  width:30px; height:30px; flex:none; border-radius:var(--r-sm);
+  border:1px solid var(--rule); background:var(--surface);
+  display:grid; place-items:center;
+}
+.ident-mark svg{ width:17px; height:17px; display:block; }
+.ident-text h1{
+  margin:0; font-family:var(--mono); font-size:15px; font-weight:600;
+  letter-spacing:.14em; text-transform:uppercase;
+}
+.ident-text p{ margin:1px 0 0; font-size:11.5px; color:var(--ink-2); }
+.masthead-tools{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.chip{
+  font-family:var(--mono); font-size:10.5px; letter-spacing:.07em; text-transform:uppercase;
+  color:var(--ink-2); border:1px solid var(--rule); border-radius:100px;
+  padding:5px 11px; display:inline-flex; align-items:center; gap:7px; white-space:nowrap;
+}
+.chip .live{ width:5px; height:5px; border-radius:50%; background:var(--ok); }
+.mode-toggle{
+  display:flex; border:1px solid var(--rule); border-radius:100px; overflow:hidden; background:var(--surface);
+}
+.mode-toggle button{
+  appearance:none; border:0; background:transparent; cursor:pointer;
+  font-family:var(--mono); font-size:10.5px; letter-spacing:.09em; text-transform:uppercase;
+  color:var(--ink-3); padding:5px 11px; transition:color .16s, background .16s;
+}
+.mode-toggle button[aria-pressed="true"]{ background:var(--ink); color:var(--ground); }
 
-  /* ---------- layout grid ---------- */
-  .grid{ display:grid; grid-template-columns:1fr 360px; gap:20px; align-items:start; }
-  @media (max-width:980px){ .grid{ grid-template-columns:1fr; } }
+/* ---------- scenario selector ------------------------------------------ */
+.selector{
+  position:relative;                 /* keeps the sliding indicator anchored here */
+  display:flex; gap:2px; margin:18px 0 16px;
+  border:1px solid var(--rule); border-radius:var(--r-md); padding:3px;
+  background:var(--surface); width:fit-content; max-width:100%; overflow:hidden;
+}
+.sel-indicator{
+  position:absolute; top:3px; bottom:3px; left:3px; width:0;
+  background:var(--surface-2); border:1px solid var(--rule);
+  border-radius:var(--r-sm); pointer-events:none; z-index:0;
+  transition:left .28s cubic-bezier(.4,0,.2,1), width .28s cubic-bezier(.4,0,.2,1);
+}
+.sel-btn{
+  position:relative; z-index:1; appearance:none; border:0; background:transparent; cursor:pointer;
+  font-family:var(--mono); font-size:11.5px; letter-spacing:.07em; text-transform:uppercase;
+  color:var(--ink-3); padding:8px 16px; white-space:nowrap; transition:color .2s;
+}
+.sel-btn[aria-selected="true"]{ color:var(--ink); }
+.sel-btn:hover{ color:var(--ink-2); }
 
-  .card{
-    background:linear-gradient(180deg, var(--panel-2) 0%, var(--panel) 100%);
-    border:1px solid var(--border); border-radius:var(--radius);
-    box-shadow:0 1px 0 rgba(255,255,255,.02) inset, 0 20px 40px -24px rgba(0,0,0,.6);
-  }
-  .card-head{
-    display:flex; align-items:center; justify-content:space-between;
-    padding:16px 18px 12px; border-bottom:1px solid var(--border-soft);
-  }
-  .card-head h2{ font-size:13px; font-weight:620; margin:0; color:var(--text-0); letter-spacing:.01em; }
-  .card-head .sub{ font-size:11.5px; color:var(--text-2); font-family:var(--mono); }
+/* ---------- verdict band (largest type on the page) --------------------- */
+.verdict{
+  border:1px solid var(--rule); border-radius:var(--r-lg); background:var(--surface);
+  padding:18px var(--pad); margin-bottom:16px;
+  display:grid; grid-template-columns:minmax(0,1fr) auto; gap:24px; align-items:center;
+}
+@media (max-width:860px){ .verdict{ grid-template-columns:1fr; } }
+.verdict-eyebrow{
+  font-family:var(--mono); font-size:10px; letter-spacing:.16em; text-transform:uppercase;
+  color:var(--ink-3); margin-bottom:7px;
+}
+.verdict-metric{ font-size:16px; font-weight:600; letter-spacing:-.01em; margin-bottom:5px; }
+.verdict-foot{ font-size:12px; color:var(--ink-2); max-width:62ch; }
+.verdict-figures{ display:flex; align-items:flex-end; gap:20px; }
+.figure{ text-align:right; }
+.figure .fv{
+  font-family:var(--mono); font-size:clamp(30px,4.4vw,50px); font-weight:600;
+  line-height:.92; letter-spacing:-.03em; font-variant-numeric:tabular-nums; display:block;
+}
+.figure.adaptive .fv{ color:var(--active); }
+.figure.baseline .fv{ color:var(--ink-3); }
+.figure .fk{
+  font-family:var(--mono); font-size:9.5px; letter-spacing:.14em; text-transform:uppercase;
+  color:var(--ink-3); margin-top:9px; display:block;
+}
+.figure-vs{
+  font-family:var(--mono); font-size:11px; color:var(--ink-3); padding-bottom:14px;
+  letter-spacing:.1em; text-transform:uppercase;
+}
+.delta{
+  font-family:var(--mono); font-size:11px; letter-spacing:.03em;
+  color:var(--active); border:1px solid var(--active); background:var(--active-soft);
+  border-radius:100px; padding:6px 13px; white-space:nowrap; align-self:center;
+}
 
-  /* ---------- map card ---------- */
-  .map-wrap{ position:relative; }
-  .map-svg-holder{ padding:14px; }
-  svg.map{ width:100%; height:auto; display:block; border-radius:10px; background:#0a0f16; }
+/* ---------- working area ------------------------------------------------ */
+.work{ display:grid; grid-template-columns:minmax(0,1fr) 330px; gap:16px; align-items:start; }
+@media (max-width:1080px){ .work{ grid-template-columns:1fr; } }
 
-  .legend{
-    display:flex; gap:16px; flex-wrap:wrap; padding:0 18px 16px; font-size:11.5px; color:var(--text-1);
-  }
-  .legend-item{ display:flex; align-items:center; gap:7px; }
-  .legend-swatch{ width:16px; height:3px; border-radius:2px; flex-shrink:0; }
-  .legend-swatch.dashed{ background:repeating-linear-gradient(90deg, currentColor 0 6px, transparent 6px 10px); height:2px; }
-  .legend-dot{ width:9px; height:9px; border-radius:50%; flex-shrink:0; }
+.panel{ border:1px solid var(--rule); border-radius:var(--r-lg); background:var(--surface); overflow:hidden; }
+.panel-head{
+  display:flex; align-items:center; justify-content:space-between; gap:12px;
+  padding:12px var(--pad); border-bottom:1px solid var(--rule-soft);
+}
+.panel-title{
+  font-family:var(--mono); font-size:10.5px; letter-spacing:.14em; text-transform:uppercase;
+  color:var(--ink-2); margin:0; font-weight:500;
+}
+.panel-note{ font-family:var(--mono); font-size:10.5px; color:var(--ink-3); font-variant-numeric:tabular-nums; }
 
-  /* ---------- playback ---------- */
-  .playback{ padding:14px 18px 18px; border-top:1px solid var(--border-soft); }
-  .playback-row{ display:flex; align-items:center; gap:12px; }
-  .play-btn{
-    width:38px; height:38px; border-radius:50%; border:1px solid var(--border);
-    background:var(--panel); color:var(--text-0); display:flex; align-items:center; justify-content:center;
-    cursor:pointer; flex-shrink:0; transition:background .15s ease, transform .1s ease, border-color .15s ease;
-  }
-  .play-btn:hover{ background:#1a2130; border-color:#2c3547; }
-  .play-btn:active{ transform:scale(.93); }
-  .play-btn svg{ width:15px; height:15px; }
-  input[type=range]{
-    -webkit-appearance:none; appearance:none; flex:1; height:4px; border-radius:3px;
-    background:var(--border); outline:none; cursor:pointer;
-  }
-  input[type=range]::-webkit-slider-thumb{
-    -webkit-appearance:none; width:14px; height:14px; border-radius:50%;
-    background:var(--cyan); box-shadow:0 0 0 4px rgba(62,230,200,.18), 0 2px 6px rgba(0,0,0,.5);
-    cursor:pointer; margin-top:-5px;
-  }
-  input[type=range]::-webkit-slider-runnable-track{ height:4px; border-radius:3px; }
-  .time-read{ font-family:var(--mono); font-size:11.5px; color:var(--text-1); white-space:nowrap; min-width:86px; text-align:right; }
-  .speed-row{ display:flex; gap:6px; margin-top:11px; }
-  .speed-btn{
-    font-family:var(--mono); font-size:11px; color:var(--text-2); background:transparent;
-    border:1px solid var(--border); padding:4px 9px; border-radius:6px; cursor:pointer; transition:all .15s ease;
-  }
-  .speed-btn.active{ color:#04120f; background:var(--cyan); border-color:var(--cyan); font-weight:600; }
+/* map */
+.map-frame{ background:var(--map-bg); border-bottom:1px solid var(--rule-soft); }
+svg.chart{ display:block; width:100%; height:auto; }
 
-  /* ---------- telemetry strip ---------- */
-  .telemetry{
-    display:grid; grid-template-columns:repeat(4,1fr); gap:1px;
-    background:var(--border-soft); border-top:1px solid var(--border-soft);
-  }
-  .telemetry .cell{ background:var(--panel); padding:12px 16px; }
-  .telemetry .label{ font-size:10px; color:var(--text-2); text-transform:uppercase; letter-spacing:.08em; margin-bottom:5px; }
-  .telemetry .value{ font-family:var(--mono); font-size:16px; font-weight:600; color:var(--text-0); }
-  .telemetry .value.mode-MISSION{ color:var(--text-0); }
-  .telemetry .value.mode-HOLD{ color:var(--amber); }
-  .telemetry .value.mode-RETURN_TO_LAUNCH{ color:var(--violet); }
-  .telemetry .value.mode-LAND{ color:var(--red); }
+/* layer toggles */
+.layers{ display:flex; gap:6px; padding:11px var(--pad); border-bottom:1px solid var(--rule-soft); flex-wrap:wrap; }
+.layer{
+  appearance:none; cursor:pointer; background:transparent;
+  border:1px solid var(--rule); border-radius:100px; padding:5px 11px;
+  font-family:var(--mono); font-size:10px; letter-spacing:.08em; text-transform:uppercase;
+  color:var(--ink-3); display:inline-flex; align-items:center; gap:7px;
+  transition:color .16s, border-color .16s, background .16s;
+}
+.layer .key{ width:14px; height:0; border-top-width:2px; border-top-style:dashed; border-color:currentColor; flex:none; }
+.layer .key.solid{ border-top-style:solid; }
+.layer .key.box{ height:9px; width:9px; border:1px solid currentColor; border-radius:2px; }
+.layer[aria-pressed="true"]{ color:var(--ink); border-color:var(--ink-3); }
+.layer[aria-pressed="false"]{ opacity:.5; }
 
-  /* ---------- sidebar ---------- */
-  .side{ display:flex; flex-direction:column; gap:16px; }
-  .scenario-blurb{ padding:16px 18px; font-size:12.5px; line-height:1.55; color:var(--text-1); }
-  .scenario-blurb b{ color:var(--text-0); font-weight:600; }
+/* transport */
+.transport{ display:flex; align-items:center; gap:14px; padding:13px var(--pad); flex-wrap:wrap; }
+.tp-btn{
+  width:34px; height:34px; flex:none; border-radius:50%; cursor:pointer;
+  border:1px solid var(--rule); background:var(--surface-2); color:var(--ink);
+  display:grid; place-items:center; transition:border-color .16s, background .16s;
+}
+.tp-btn:hover{ border-color:var(--ink-3); }
+.tp-btn svg{ width:13px; height:13px; display:block; }
+.scrub{ flex:1 1 220px; min-width:160px; padding:9px 0; cursor:pointer; touch-action:none; }
+.scrub-track{ position:relative; height:3px; border-radius:2px; background:var(--rule); }
+.scrub-fill{ position:absolute; inset:0 auto 0 0; width:0; border-radius:2px; background:var(--active); }
+.scrub-tick{
+  position:absolute; top:-4px; width:2px; height:11px; border-radius:1px;
+  background:var(--planned); transform:translateX(-1px);
+}
+.scrub-thumb{
+  position:absolute; top:50%; width:13px; height:13px; border-radius:50%;
+  background:var(--active); border:2px solid var(--surface);
+  transform:translate(-50%,-50%); pointer-events:none;
+  box-shadow:0 0 0 1px var(--active);
+}
+.tp-time{
+  font-family:var(--mono); font-size:11.5px; color:var(--ink-2);
+  font-variant-numeric:tabular-nums; white-space:nowrap;
+}
+.tp-speeds{ display:flex; gap:3px; }
+.tp-speed{
+  appearance:none; cursor:pointer; background:transparent; border:1px solid var(--rule);
+  border-radius:var(--r-sm); padding:4px 8px; color:var(--ink-3);
+  font-family:var(--mono); font-size:10px; font-variant-numeric:tabular-nums;
+  transition:color .16s, border-color .16s, background .16s;
+}
+.tp-speed[aria-pressed="true"]{ color:var(--ground); background:var(--ink); border-color:var(--ink); }
 
-  .event-log{ padding:6px 8px 12px; max-height:230px; overflow-y:auto; }
-  .event{
-    display:flex; gap:11px; padding:10px 10px; border-radius:9px; opacity:.42;
-    transition:opacity .3s ease, background .3s ease;
-  }
-  .event.active{ opacity:1; background:rgba(62,230,200,.07); }
-  .event.past{ opacity:.75; }
-  .event-time{
-    font-family:var(--mono); font-size:10.5px; color:var(--text-2); width:44px; flex-shrink:0; padding-top:2px;
-  }
-  .event.active .event-time{ color:var(--cyan); }
-  .event-dot-col{ display:flex; flex-direction:column; align-items:center; padding-top:3px; }
-  .event-dot{ width:7px; height:7px; border-radius:50%; background:var(--border); flex-shrink:0; }
-  .event.active .event-dot{ background:var(--cyan); box-shadow:0 0 8px var(--cyan); }
-  .event.trigger .event-dot{ background:var(--amber); }
-  .event.trigger.active .event-dot{ background:var(--amber); box-shadow:0 0 8px var(--amber); }
-  .event-line{ width:1px; flex:1; background:var(--border-soft); margin-top:3px; }
-  .event-text{ font-size:12px; color:var(--text-1); line-height:1.4; padding-bottom:2px; }
-  .event.active .event-text{ color:var(--text-0); }
-  .event-text b{ color:var(--text-0); font-weight:600; }
+/* readouts */
+.readouts{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); border-top:1px solid var(--rule-soft); }
+.readout{ padding:12px var(--pad); border-left:1px solid var(--rule-soft); }
+.readout:first-child{ border-left:0; }
+.readout .rk{
+  font-family:var(--mono); font-size:9.5px; letter-spacing:.13em; text-transform:uppercase;
+  color:var(--ink-3); margin-bottom:5px;
+}
+.readout .rv{
+  font-family:var(--mono); font-size:15px; font-weight:600; font-variant-numeric:tabular-nums;
+  letter-spacing:-.01em;
+}
+.rv[data-mode="HOLD"]{ color:var(--planned); }
+.rv[data-mode="RETURN_TO_LAUNCH"], .rv[data-mode="LAND"]{ color:var(--active); }
+.rv[data-state="replanning"]{ color:var(--active); }
 
-  /* ---------- stat cards ---------- */
-  .stat-group{ padding:16px 18px 18px; display:flex; flex-direction:column; gap:12px; }
-  .stat-group-title{ font-size:10.5px; text-transform:uppercase; letter-spacing:.09em; color:var(--text-2); margin-bottom:2px; }
-  .compare-row{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
-  .compare-card{
-    border:1px solid var(--border-soft); border-radius:10px; padding:12px 13px;
-    background:var(--panel); position:relative; overflow:hidden;
-    transition:transform .18s ease, box-shadow .18s ease, border-color .18s ease;
-  }
-  .compare-card:hover{ transform:translateY(-2px); box-shadow:0 14px 26px -14px rgba(0,0,0,.55); border-color:#2a3348; }
-  .compare-card.adaptive{ border-top:2px solid var(--cyan); }
-  .compare-card.baseline{ border-top:2px solid var(--amber); }
-  .compare-card .tag{
-    font-size:9.5px; text-transform:uppercase; letter-spacing:.08em; font-weight:700; margin-bottom:8px;
-  }
-  .compare-card.adaptive .tag{ color:var(--cyan); }
-  .compare-card.baseline .tag{ color:var(--amber); }
-  .compare-metric{ margin-bottom:7px; }
-  .compare-metric:last-child{ margin-bottom:0; }
-  .compare-metric .k{ font-size:9.5px; color:var(--text-2); letter-spacing:.02em; }
-  .compare-metric .v{ font-family:var(--mono); font-size:14.5px; font-weight:650; color:var(--text-0); }
+/* right rail */
+.rail{ display:flex; flex-direction:column; gap:16px; }
+.brief{ padding:15px var(--pad); font-size:13px; line-height:1.6; color:var(--ink-2); }
+.brief strong{ color:var(--ink); font-weight:600; }
 
-  .headline-pill{
-    display:flex; align-items:center; gap:9px; padding:10px 13px; border-radius:10px;
-    background:linear-gradient(135deg, rgba(62,230,200,.13), rgba(62,230,200,.04));
-    border:1px solid rgba(62,230,200,.28); font-size:12px; color:var(--text-0);
-  }
-  .headline-pill svg{ width:15px; height:15px; color:var(--cyan); flex-shrink:0; }
-  .headline-pill b{ color:var(--cyan); font-weight:700; }
+.timeline{ padding:6px var(--pad) 15px; }
+.tl-item{ display:grid; grid-template-columns:46px 13px minmax(0,1fr); gap:10px; align-items:start; }
+.tl-time{
+  font-family:var(--mono); font-size:10.5px; color:var(--ink-3);
+  font-variant-numeric:tabular-nums; padding-top:9px;
+}
+.tl-rail{ display:flex; flex-direction:column; align-items:center; height:100%; }
+.tl-node{
+  width:7px; height:7px; border-radius:50%; margin-top:12px; flex:none;
+  background:var(--rule); border:1px solid var(--rule);
+}
+.tl-line{ width:1px; flex:1 1 auto; background:var(--rule-soft); min-height:12px; }
+.tl-text{ font-size:12.5px; color:var(--ink-3); padding:8px 0 10px; line-height:1.45; }
+.tl-text strong{ font-weight:600; }
+.tl-item[data-state="reached"] .tl-node{ background:var(--ink-3); border-color:var(--ink-3); }
+.tl-item[data-state="reached"] .tl-text{ color:var(--ink-2); }
+.tl-item[data-state="current"] .tl-time{ color:var(--active); }
+.tl-item[data-state="current"] .tl-text{ color:var(--ink); }
+.tl-item[data-state="current"] .tl-node{ background:var(--active); border-color:var(--active); box-shadow:0 0 0 3px var(--active-soft); }
+.tl-item[data-kind="trigger"][data-state="current"] .tl-node,
+.tl-item[data-kind="trigger"][data-state="reached"] .tl-node{ background:var(--planned); border-color:var(--planned); }
+.tl-item[data-kind="trigger"][data-state="current"] .tl-node{ box-shadow:0 0 0 3px var(--planned-soft); }
+.tl-item[data-kind="trigger"][data-state="current"] .tl-time{ color:var(--planned); }
 
-  /* ---------- overview bars (bottom) ---------- */
-  .overview{ margin-top:20px; }
-  .overview .card-head p.desc{ margin:2px 0 0; font-size:11.5px; color:var(--text-2); }
-  .bars{ padding:18px; display:grid; grid-template-columns:repeat(3,1fr); gap:22px; }
-  @media (max-width:820px){ .bars{ grid-template-columns:1fr; } }
-  .bar-block .bar-title{ font-size:12px; font-weight:600; color:var(--text-0); margin-bottom:2px; }
-  .bar-block .bar-sub{ font-size:11px; color:var(--text-2); margin-bottom:12px; font-family:var(--mono); }
-  .bar-line{ display:flex; align-items:center; gap:10px; margin-bottom:9px; }
-  .bar-line .bl-label{ width:64px; flex-shrink:0; font-size:11px; color:var(--text-1); text-align:right; }
-  .bar-line .bl-track{ flex:1; height:20px; background:var(--border-soft); border-radius:6px; overflow:hidden; position:relative; }
-  .bar-line .bl-fill{ height:100%; border-radius:6px; width:0%; transition:width 1s cubic-bezier(.2,.8,.2,1); position:relative; }
-  .bar-line .bl-fill.adaptive{ background:linear-gradient(90deg, var(--cyan-dim), var(--cyan)); }
-  .bar-line .bl-fill.baseline{ background:linear-gradient(90deg, var(--amber-dim), var(--amber)); }
-  .bar-line .bl-val{ font-family:var(--mono); font-size:10.5px; color:var(--text-0); width:64px; flex-shrink:0; }
+/* ---------- comparison matrix ------------------------------------------ */
+.matrix{ margin-top:16px; }
+.matrix-scroll{ overflow-x:auto; }
+table.cmp{ width:100%; border-collapse:collapse; min-width:660px; }
+table.cmp th, table.cmp td{ text-align:left; padding:11px var(--pad); border-top:1px solid var(--rule-soft); }
+table.cmp thead th{
+  border-top:0; font-family:var(--mono); font-size:9.5px; letter-spacing:.13em;
+  text-transform:uppercase; color:var(--ink-3); font-weight:500; padding-top:13px; padding-bottom:9px;
+}
+table.cmp tbody tr:hover{ background:var(--surface-2); }
+.cmp-scenario{ font-size:12.5px; color:var(--ink); }
+.cmp-cond{
+  font-family:var(--mono); font-size:10px; letter-spacing:.09em; text-transform:uppercase;
+}
+.cmp-cond[data-c="adaptive"]{ color:var(--active); }
+.cmp-cond[data-c="baseline"]{ color:var(--ink-3); }
+.cmp-num{ font-family:var(--mono); font-size:12.5px; font-variant-numeric:tabular-nums; }
+.cmp-bar{ display:flex; align-items:center; gap:9px; }
+.cmp-bar-track{ flex:1 1 auto; height:5px; border-radius:3px; background:var(--rule); min-width:56px; overflow:hidden; }
+.cmp-bar-fill{ height:100%; border-radius:3px; width:0; transition:width .8s cubic-bezier(.3,.8,.3,1); }
+.cmp-bar-fill[data-c="adaptive"]{ background:var(--active); }
+.cmp-bar-fill[data-c="baseline"]{ background:var(--ink-3); }
 
-  footer.foot{
-    margin-top:30px; padding-top:16px; border-top:1px solid var(--border-soft);
-    font-size:11px; color:var(--text-2); display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px;
-  }
-  footer.foot a{ color:var(--text-1); }
+footer.colophon{
+  margin-top:22px; padding-top:14px; border-top:1px solid var(--rule);
+  display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap;
+  font-family:var(--mono); font-size:10.5px; letter-spacing:.05em; color:var(--ink-3);
+  text-transform:uppercase;
+}
 
-  @keyframes pulse-ring{
-    0%{ transform:scale(.4); opacity:.9; }
-    70%{ transform:scale(2.6); opacity:0; }
-    100%{ transform:scale(2.6); opacity:0; }
-  }
-  @keyframes fade-in-up{
-    from{ opacity:0; transform:translateY(6px); }
-    to{ opacity:1; transform:translateY(0); }
-  }
-  .fade-in{ animation:fade-in-up .4s cubic-bezier(.2,.8,.2,1) both; }
+@keyframes ring{ from{ r:6; opacity:.85; } to{ r:19; opacity:0; } }
+@media (prefers-reduced-motion: reduce){
+  *{ animation-duration:.001ms !important; animation-iteration-count:1 !important; transition-duration:.001ms !important; }
+}
 </style>
 </head>
 <body>
 <div class="shell">
 
-  <header class="top">
-    <div class="brand">
-      <div class="brand-mark">
-        <svg viewBox="0 0 24 24" fill="none" stroke="#04120f" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 2 L14 9 L21 8 L15 13 L18 21 L12 17 L6 21 L9 13 L3 8 L10 9 Z"/>
+  <header class="masthead">
+    <div class="ident">
+      <div class="ident-mark">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 3v18M3 12h18" opacity=".35"/>
+          <path d="M12 4.5 18.5 19 12 15.4 5.5 19Z" fill="currentColor" fill-opacity=".14"/>
         </svg>
       </div>
-      <div>
+      <div class="ident-text">
         <h1>GroundLink</h1>
-        <p>Real-Time Adaptive Drone Mission Planner — Flight Replay</p>
+        <p>Adaptive mission replanning &mdash; recorded flight replay</p>
       </div>
     </div>
-    <div class="top-right">
-      <div class="badge"><span class="dot"></span> Recorded SITL flight data</div>
-      <div class="badge">40 trials · 8 conditions</div>
+    <div class="masthead-tools">
+      <span class="chip"><span class="live"></span> PX4 SITL &mdash; recorded</span>
+      <span class="chip">40 trials &middot; 8 conditions</span>
+      <div class="mode-toggle" role="group" aria-label="Display mode">
+        <button type="button" id="modeNight" aria-pressed="true">Night</button>
+        <button type="button" id="modeDay" aria-pressed="false">Day</button>
+      </div>
     </div>
   </header>
 
-  <div class="tabs" id="tabs"></div>
-
-  <div class="grid">
-    <div class="main-col">
-      <div class="card map-wrap">
-        <div class="card-head">
-          <div>
-            <h2 id="scenarioTitle">—</h2>
-          </div>
-          <div class="sub" id="scenarioMeta">—</div>
-        </div>
-        <div class="map-svg-holder">
-          <svg class="map" id="mapSvg" viewBox="0 0 1000 640" preserveAspectRatio="xMidYMid meet"></svg>
-        </div>
-        <div class="legend" id="legend"></div>
-        <div class="playback">
-          <div class="playback-row">
-            <button class="play-btn" id="playBtn">
-              <svg id="playIcon" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
-            </button>
-            <input type="range" id="scrub" min="0" max="1000" value="0">
-            <div class="time-read" id="timeRead">0.0s / 0.0s</div>
-          </div>
-          <div class="speed-row" id="speedRow"></div>
-        </div>
-        <div class="telemetry">
-          <div class="cell"><div class="label">Altitude</div><div class="value" id="telAlt">—</div></div>
-          <div class="cell"><div class="label">Flight Mode</div><div class="value" id="telMode">—</div></div>
-          <div class="cell"><div class="label">Elapsed</div><div class="value" id="telTime">—</div></div>
-          <div class="cell"><div class="label">Status</div><div class="value" id="telStatus">—</div></div>
-        </div>
-      </div>
-
-      <div class="card overview">
-        <div class="card-head">
-          <div>
-            <h2>Adaptive vs. Baseline — All Scenarios</h2>
-            <p class="desc">5 trials per condition, live PX4 SITL, identical injected failures</p>
-          </div>
-          <div class="sub">evaluation/RESULTS.md</div>
-        </div>
-        <div class="bars" id="overviewBars"></div>
-      </div>
-    </div>
-
-    <div class="side">
-      <div class="card">
-        <div class="card-head"><h2>Scenario</h2></div>
-        <div class="scenario-blurb" id="scenarioBlurb">—</div>
-      </div>
-
-      <div class="card">
-        <div class="card-head"><h2>Replan Timeline</h2></div>
-        <div class="event-log" id="eventLog"></div>
-      </div>
-
-      <div class="card">
-        <div class="card-head"><h2>Measured Result</h2></div>
-        <div class="stat-group" id="statGroup"></div>
-      </div>
-    </div>
+  <div class="selector" role="tablist" aria-label="Failure scenario" id="selector">
+    <div class="sel-indicator" id="selIndicator" aria-hidden="true"></div>
   </div>
 
-  <footer class="foot">
-    <span>GroundLink — Team 11 · Autonomous Drones</span>
-    <span>Replay of real recorded PX4 SITL telemetry — no live flight-controller connection</span>
+  <section class="verdict" aria-labelledby="verdictMetric">
+    <div>
+      <div class="verdict-eyebrow" id="verdictEyebrow">Measured outcome</div>
+      <div class="verdict-metric" id="verdictMetric">&mdash;</div>
+      <p class="verdict-foot" id="verdictFoot">&mdash;</p>
+    </div>
+    <div class="verdict-figures">
+      <div class="figure adaptive">
+        <span class="fv" id="figAdaptive">&mdash;</span>
+        <span class="fk">GroundLink</span>
+      </div>
+      <div class="figure-vs">vs</div>
+      <div class="figure baseline">
+        <span class="fv" id="figBaseline">&mdash;</span>
+        <span class="fk">Baseline RTL</span>
+      </div>
+      <div class="delta" id="verdictDelta">&mdash;</div>
+    </div>
+  </section>
+
+  <div class="work">
+    <div>
+      <section class="panel">
+        <div class="panel-head">
+          <h2 class="panel-title" id="mapTitle">Flight track</h2>
+          <span class="panel-note" id="mapNote">&mdash;</span>
+        </div>
+        <div class="map-frame">
+          <svg class="chart" id="chart" viewBox="0 0 1000 600" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Recorded flight track"></svg>
+        </div>
+        <div class="layers">
+          <button type="button" class="layer" data-layer="planned" aria-pressed="true"><span class="key" style="color:var(--planned)"></span> Planned route</button>
+          <button type="button" class="layer" data-layer="flown" aria-pressed="true"><span class="key solid" style="color:var(--active)"></span> Flown track</button>
+          <button type="button" class="layer" data-layer="zone" aria-pressed="true"><span class="key box" style="color:var(--alert)"></span> Restricted zone</button>
+          <button type="button" class="layer" data-layer="rings" aria-pressed="true"><span class="key" style="color:var(--ink-3)"></span> Range rings</button>
+        </div>
+        <div class="transport">
+          <button type="button" class="tp-btn" id="playBtn" aria-label="Play">
+            <svg id="playIcon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+          </button>
+          <div class="scrub" id="scrub" role="slider" tabindex="0" aria-label="Flight time" aria-valuemin="0" aria-valuenow="0" aria-valuemax="0">
+            <div class="scrub-track">
+              <div class="scrub-fill" id="scrubFill"></div>
+              <div class="scrub-tick" id="scrubTick" title="Replan trigger"></div>
+              <div class="scrub-thumb" id="scrubThumb"></div>
+            </div>
+          </div>
+          <div class="tp-time" id="tpTime">0.0 / 0.0 s</div>
+          <div class="tp-speeds" role="group" aria-label="Playback speed" id="tpSpeeds"></div>
+        </div>
+        <div class="readouts">
+          <div class="readout"><div class="rk">Altitude AGL</div><div class="rv" id="roAlt">&mdash;</div></div>
+          <div class="readout"><div class="rk">Flight mode</div><div class="rv" id="roMode">&mdash;</div></div>
+          <div class="readout"><div class="rk">Elapsed</div><div class="rv" id="roTime">&mdash;</div></div>
+          <div class="readout"><div class="rk">Replan state</div><div class="rv" id="roState">&mdash;</div></div>
+        </div>
+      </section>
+    </div>
+
+    <aside class="rail">
+      <section class="panel">
+        <div class="panel-head"><h2 class="panel-title">What happens</h2></div>
+        <div class="brief" id="brief">&mdash;</div>
+      </section>
+      <section class="panel">
+        <div class="panel-head"><h2 class="panel-title">Sequence</h2></div>
+        <div class="timeline" id="timeline"></div>
+      </section>
+    </aside>
+  </div>
+
+  <section class="panel matrix">
+    <div class="panel-head">
+      <h2 class="panel-title">All scenarios &mdash; adaptive vs baseline</h2>
+      <span class="panel-note">5 trials per condition</span>
+    </div>
+    <div class="matrix-scroll">
+      <table class="cmp">
+        <thead>
+          <tr>
+            <th scope="col">Scenario</th>
+            <th scope="col">Condition</th>
+            <th scope="col">Mission completion</th>
+            <th scope="col">Time to safe recovery</th>
+            <th scope="col">Safe recoveries</th>
+          </tr>
+        </thead>
+        <tbody id="cmpBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer class="colophon">
+    <span>GroundLink &middot; Team 11 &middot; Autonomous Drones</span>
+    <span>Replay of recorded PX4 SITL telemetry &mdash; no live vehicle connection</span>
   </footer>
 </div>
 
 <script>
+"use strict";
 const DATA = {"scenarios": {"no_fly_zone": {"scenario": "no_fly_zone", "condition": "adaptive", "home": [47.397971, 8.546164], "mission": [{"lat": 47.3979709, "lon": 8.5461635, "alt": 15.0, "kind": "TAKEOFF", "label": null}, {"lat": 47.39833062864236, "lon": 8.544702056967862, "alt": 15.0, "kind": "NAV", "label": "row0"}, {"lat": 47.39994940753302, "lon": 8.544702056967862, "alt": 15.0, "kind": "NAV", "label": "row0"}, {"lat": 47.39994940753302, "lon": 8.545897791248699, "alt": 15.0, "kind": "NAV", "label": "row1"}, {"lat": 47.39833062864236, "lon": 8.545897791248699, "alt": 15.0, "kind": "NAV", "label": "row1"}, {"lat": 47.39833062864236, "lon": 8.547093525529535, "alt": 15.0, "kind": "NAV", "label": "row2"}, {"lat": 47.39994940753302, "lon": 8.547093525529535, "alt": 15.0, "kind": "NAV", "label": "row2"}], "zone_boundary": [[47.399626, 8.546296], [47.398654, 8.546296], [47.398654, 8.545499], [47.399626, 8.545499]], "replanned_waypoints": [{"lat": 47.399724577131536, "lon": 8.545632079322345}, {"lat": 47.399724577131536, "lon": 8.54536635243025}, {"lat": 47.39855545904384, "lon": 8.54536635243025}, {"lat": 47.39833062864236, "lon": 8.547093525529535}, {"lat": 47.39994940753302, "lon": 8.547093525529535}], "event_outcome": "rerouted", "t_to_announce_s": 95.9, "t_replan_trigger": 95.90828545399563, "position_at_announce": [47.399949, 8.545833], "series": [{"t": 0.0, "lat": 47.397971, "lon": 8.546164, "alt": 0.0, "mode": null}, {"t": 0.6, "lat": 47.397971, "lon": 8.546164, "alt": -0.0, "mode": null}, {"t": 1.2, "lat": 47.397971, "lon": 8.546164, "alt": -0.0, "mode": "MISSION"}, {"t": 1.8, "lat": 47.397971, "lon": 8.546164, "alt": -0.0, "mode": "MISSION"}, {"t": 2.4, "lat": 47.397971, "lon": 8.546164, "alt": -0.0, "mode": "MISSION"}, {"t": 3.0, "lat": 47.397971, "lon": 8.546164, "alt": -0.0, "mode": "MISSION"}, {"t": 3.6, "lat": 47.397971, "lon": 8.546164, "alt": -0.0, "mode": "MISSION"}, {"t": 4.2, "lat": 47.397971, "lon": 8.546164, "alt": -0.0, "mode": "MISSION"}, {"t": 4.8, "lat": 47.397971, "lon": 8.546164, "alt": 0.1, "mode": "MISSION"}, {"t": 5.4, "lat": 47.39797, "lon": 8.546164, "alt": 0.6, "mode": "MISSION"}, {"t": 6.0, "lat": 47.39797, "lon": 8.546164, "alt": 1.2, "mode": "MISSION"}, {"t": 6.6, "lat": 47.39797, "lon": 8.546164, "alt": 1.9, "mode": "MISSION"}, {"t": 7.2, "lat": 47.397971, "lon": 8.546164, "alt": 2.7, "mode": "MISSION"}, {"t": 7.8, "lat": 47.397971, "lon": 8.546164, "alt": 3.5, "mode": "MISSION"}, {"t": 8.4, "lat": 47.397971, "lon": 8.546164, "alt": 4.4, "mode": "MISSION"}, {"t": 9.0, "lat": 47.397971, "lon": 8.546164, "alt": 5.2, "mode": "MISSION"}, {"t": 9.6, "lat": 47.397971, "lon": 8.546164, "alt": 6.1, "mode": "MISSION"}, {"t": 10.2, "lat": 47.397971, "lon": 8.546164, "alt": 7.0, "mode": "MISSION"}, {"t": 10.8, "lat": 47.397971, "lon": 8.546164, "alt": 7.8, "mode": "MISSION"}, {"t": 11.4, "lat": 47.397971, "lon": 8.546164, "alt": 8.7, "mode": "MISSION"}, {"t": 12.0, "lat": 47.397971, "lon": 8.546164, "alt": 9.6, "mode": "MISSION"}, {"t": 12.6, "lat": 47.397971, "lon": 8.546164, "alt": 10.5, "mode": "MISSION"}, {"t": 13.2, "lat": 47.397971, "lon": 8.546164, "alt": 11.8, "mode": "MISSION"}, {"t": 13.8, "lat": 47.397971, "lon": 8.546164, "alt": 12.6, "mode": "MISSION"}, {"t": 14.4, "lat": 47.397971, "lon": 8.546164, "alt": 13.1, "mode": "MISSION"}, {"t": 15.0, "lat": 47.39797, "lon": 8.546164, "alt": 13.6, "mode": "MISSION"}, {"t": 15.6, "lat": 47.397971, "lon": 8.546164, "alt": 14.0, "mode": "MISSION"}, {"t": 16.2, "lat": 47.397971, "lon": 8.546164, "alt": 14.2, "mode": "MISSION"}, {"t": 16.8, "lat": 47.397971, "lon": 8.546163, "alt": 14.4, "mode": "MISSION"}, {"t": 17.4, "lat": 47.397974, "lon": 8.546151, "alt": 14.6, "mode": "MISSION"}, {"t": 18.0, "lat": 47.397979, "lon": 8.546123, "alt": 14.7, "mode": "MISSION"}, {"t": 18.6, "lat": 47.397986, "lon": 8.546086, "alt": 14.7, "mode": "MISSION"}, {"t": 19.2, "lat": 47.397995, "lon": 8.54605, "alt": 14.7, "mode": "MISSION"}, {"t": 19.8, "lat": 47.398005, "lon": 8.546017, "alt": 14.7, "mode": "MISSION"}, {"t": 20.4, "lat": 47.398014, "lon": 8.545982, "alt": 14.7, "mode": "MISSION"}, {"t": 21.0, "lat": 47.398023, "lon": 8.545946, "alt": 14.7, "mode": "MISSION"}, {"t": 21.6, "lat": 47.398033, "lon": 8.545909, "alt": 14.7, "mode": "MISSION"}, {"t": 22.2, "lat": 47.398042, "lon": 8.545872, "alt": 14.7, "mode": "MISSION"}, {"t": 22.8, "lat": 47.398052, "lon": 8.545835, "alt": 14.7, "mode": "MISSION"}, {"t": 23.4, "lat": 47.398061, "lon": 8.545798, "alt": 14.8, "mode": "MISSION"}, {"t": 24.0, "lat": 47.398071, "lon": 8.54576, "alt": 14.8, "mode": "MISSION"}, {"t": 24.6, "lat": 47.39808, "lon": 8.545723, "alt": 14.8, "mode": "MISSION"}, {"t": 25.2, "lat": 47.398089, "lon": 8.545685, "alt": 14.8, "mode": "MISSION"}, {"t": 25.8, "lat": 47.398098, "lon": 8.545648, "alt": 14.8, "mode": "MISSION"}, {"t": 26.4, "lat": 47.398107, "lon": 8.54561, "alt": 14.8, "mode": "MISSION"}, {"t": 27.0, "lat": 47.398117, "lon": 8.545573, "alt": 14.8, "mode": "MISSION"}, {"t": 27.6, "lat": 47.398126, "lon": 8.545535, "alt": 14.8, "mode": "MISSION"}, {"t": 28.2, "lat": 47.398135, "lon": 8.545498, "alt": 14.8, "mode": "MISSION"}, {"t": 28.8, "lat": 47.398144, "lon": 8.54546, "alt": 14.8, "mode": "MISSION"}, {"t": 29.4, "lat": 47.398153, "lon": 8.545423, "alt": 14.8, "mode": "MISSION"}, {"t": 30.0, "lat": 47.398163, "lon": 8.545386, "alt": 14.8, "mode": "MISSION"}, {"t": 30.6, "lat": 47.398172, "lon": 8.545348, "alt": 14.8, "mode": "MISSION"}, {"t": 31.2, "lat": 47.398181, "lon": 8.54531, "alt": 14.9, "mode": "MISSION"}, {"t": 31.8, "lat": 47.39819, "lon": 8.545273, "alt": 14.9, "mode": "MISSION"}, {"t": 32.4, "lat": 47.398199, "lon": 8.545235, "alt": 14.9, "mode": "MISSION"}, {"t": 33.0, "lat": 47.398209, "lon": 8.545198, "alt": 14.9, "mode": "MISSION"}, {"t": 33.6, "lat": 47.398218, "lon": 8.545161, "alt": 14.9, "mode": "MISSION"}, {"t": 34.2, "lat": 47.398227, "lon": 8.545123, "alt": 14.9, "mode": "MISSION"}, {"t": 34.8, "lat": 47.398236, "lon": 8.545086, "alt": 14.9, "mode": "MISSION"}, {"t": 35.4, "lat": 47.398245, "lon": 8.545049, "alt": 14.9, "mode": "MISSION"}, {"t": 36.0, "lat": 47.398255, "lon": 8.545011, "alt": 14.9, "mode": "MISSION"}, {"t": 36.6, "lat": 47.398264, "lon": 8.544973, "alt": 14.9, "mode": "MISSION"}, {"t": 37.2, "lat": 47.398273, "lon": 8.544936, "alt": 14.9, "mode": "MISSION"}, {"t": 37.8, "lat": 47.398283, "lon": 8.544899, "alt": 14.9, "mode": "MISSION"}, {"t": 38.4, "lat": 47.398292, "lon": 8.544861, "alt": 15.0, "mode": "MISSION"}, {"t": 39.0, "lat": 47.398301, "lon": 8.544824, "alt": 15.0, "mode": "MISSION"}, {"t": 39.6, "lat": 47.39831, "lon": 8.544787, "alt": 15.0, "mode": "MISSION"}, {"t": 40.2, "lat": 47.398317, "lon": 8.544757, "alt": 15.0, "mode": "MISSION"}, {"t": 40.8, "lat": 47.398324, "lon": 8.544734, "alt": 15.0, "mode": "MISSION"}, {"t": 41.4, "lat": 47.398336, "lon": 8.544718, "alt": 15.0, "mode": "MISSION"}, {"t": 42.0, "lat": 47.398354, "lon": 8.544711, "alt": 15.0, "mode": "MISSION"}, {"t": 42.6, "lat": 47.398373, "lon": 8.544708, "alt": 15.0, "mode": "MISSION"}, {"t": 43.2, "lat": 47.398397, "lon": 8.544708, "alt": 15.0, "mode": "MISSION"}, {"t": 43.8, "lat": 47.398424, "lon": 8.544708, "alt": 15.0, "mode": "MISSION"}, {"t": 44.4, "lat": 47.39845, "lon": 8.544707, "alt": 15.0, "mode": "MISSION"}, {"t": 45.0, "lat": 47.398476, "lon": 8.544706, "alt": 15.0, "mode": "MISSION"}, {"t": 45.6, "lat": 47.398503, "lon": 8.544707, "alt": 15.0, "mode": "MISSION"}, {"t": 46.2, "lat": 47.39853, "lon": 8.544707, "alt": 15.0, "mode": "MISSION"}, {"t": 46.8, "lat": 47.398558, "lon": 8.544707, "alt": 15.0, "mode": "MISSION"}, {"t": 47.4, "lat": 47.398585, "lon": 8.544707, "alt": 15.0, "mode": "MISSION"}, {"t": 48.0, "lat": 47.398612, "lon": 8.544708, "alt": 15.0, "mode": "MISSION"}, {"t": 48.6, "lat": 47.398639, "lon": 8.544708, "alt": 15.0, "mode": "MISSION"}, {"t": 49.2, "lat": 47.398665, "lon": 8.544707, "alt": 15.0, "mode": "MISSION"}, {"t": 49.8, "lat": 47.398692, "lon": 8.544707, "alt": 15.0, "mode": "MISSION"}, {"t": 50.4, "lat": 47.398719, "lon": 8.544707, "alt": 15.0, "mode": "MISSION"}, {"t": 51.0, "lat": 47.398746, "lon": 8.544708, "alt": 15.0, "mode": "MISSION"}, {"t": 51.6, "lat": 47.398773, "lon": 8.544707, "alt": 15.0, "mode": "MISSION"}, {"t": 52.2, "lat": 47.3988, "lon": 8.544707, "alt": 15.0, "mode": "MISSION"}, {"t": 52.8, "lat": 47.398827, "lon": 8.544707, "alt": 15.0, "mode": "MISSION"}, {"t": 53.4, "lat": 47.398854, "lon": 8.544707, "alt": 15.0, "mode": "MISSION"}, {"t": 54.0, "lat": 47.398881, "lon": 8.544707, "alt": 15.0, "mode": "MISSION"}, {"t": 54.6, "lat": 47.398908, "lon": 8.544707, "alt": 15.0, "mode": "MISSION"}, {"t": 55.2, "lat": 47.398935, "lon": 8.544707, "alt": 15.0, "mode": "MISSION"}, {"t": 55.8, "lat": 47.398962, "lon": 8.544707, "alt": 15.0, "mode": "MISSION"}, {"t": 56.4, "lat": 47.398989, "lon": 8.544706, "alt": 15.0, "mode": "MISSION"}, {"t": 57.0, "lat": 47.399016, "lon": 8.544706, "alt": 15.0, "mode": "MISSION"}, {"t": 57.6, "lat": 47.399043, "lon": 8.544707, "alt": 15.0, "mode": "MISSION"}, {"t": 58.2, "lat": 47.39907, "lon": 8.544707, "alt": 15.0, "mode": "MISSION"}, {"t": 58.8, "lat": 47.399097, "lon": 8.544706, "alt": 15.0, "mode": "MISSION"}, {"t": 59.4, "lat": 47.399124, "lon": 8.544706, "alt": 15.0, "mode": "MISSION"}, {"t": 60.0, "lat": 47.399151, "lon": 8.544706, "alt": 15.0, "mode": "MISSION"}, {"t": 60.6, "lat": 47.399178, "lon": 8.544705, "alt": 15.0, "mode": "MISSION"}, {"t": 61.2, "lat": 47.399205, "lon": 8.544705, "alt": 15.0, "mode": "MISSION"}, {"t": 61.8, "lat": 47.399232, "lon": 8.544705, "alt": 15.0, "mode": "MISSION"}, {"t": 62.4, "lat": 47.399259, "lon": 8.544705, "alt": 15.0, "mode": "MISSION"}, {"t": 63.0, "lat": 47.399286, "lon": 8.544705, "alt": 15.0, "mode": "MISSION"}, {"t": 63.6, "lat": 47.399313, "lon": 8.544705, "alt": 15.0, "mode": "MISSION"}, {"t": 64.2, "lat": 47.399339, "lon": 8.544705, "alt": 15.0, "mode": "MISSION"}, {"t": 64.8, "lat": 47.399366, "lon": 8.544704, "alt": 15.0, "mode": "MISSION"}, {"t": 65.4, "lat": 47.399394, "lon": 8.544705, "alt": 15.0, "mode": "MISSION"}, {"t": 66.0, "lat": 47.399421, "lon": 8.544705, "alt": 15.0, "mode": "MISSION"}, {"t": 66.6, "lat": 47.399448, "lon": 8.544705, "alt": 15.0, "mode": "MISSION"}, {"t": 67.2, "lat": 47.399474, "lon": 8.544704, "alt": 15.0, "mode": "MISSION"}, {"t": 67.8, "lat": 47.399501, "lon": 8.544704, "alt": 15.0, "mode": "MISSION"}, {"t": 68.4, "lat": 47.399529, "lon": 8.544704, "alt": 15.0, "mode": "MISSION"}, {"t": 69.0, "lat": 47.399556, "lon": 8.544704, "alt": 15.0, "mode": "MISSION"}, {"t": 69.6, "lat": 47.399583, "lon": 8.544704, "alt": 15.0, "mode": "MISSION"}, {"t": 70.2, "lat": 47.39961, "lon": 8.544704, "alt": 15.0, "mode": "MISSION"}, {"t": 70.8, "lat": 47.399637, "lon": 8.544703, "alt": 15.0, "mode": "MISSION"}, {"t": 71.4, "lat": 47.399664, "lon": 8.544703, "alt": 15.0, "mode": "MISSION"}, {"t": 72.0, "lat": 47.399691, "lon": 8.544703, "alt": 15.0, "mode": "MISSION"}, {"t": 72.6, "lat": 47.399718, "lon": 8.544703, "alt": 15.0, "mode": "MISSION"}, {"t": 73.2, "lat": 47.399745, "lon": 8.544703, "alt": 15.0, "mode": "MISSION"}, {"t": 73.8, "lat": 47.399771, "lon": 8.544703, "alt": 15.0, "mode": "MISSION"}, {"t": 74.4, "lat": 47.399798, "lon": 8.544703, "alt": 15.0, "mode": "MISSION"}, {"t": 75.0, "lat": 47.399825, "lon": 8.544703, "alt": 15.0, "mode": "MISSION"}, {"t": 75.6, "lat": 47.399852, "lon": 8.544703, "alt": 15.0, "mode": "MISSION"}, {"t": 76.2, "lat": 47.399879, "lon": 8.544702, "alt": 15.0, "mode": "MISSION"}, {"t": 76.8, "lat": 47.399902, "lon": 8.544702, "alt": 15.0, "mode": "MISSION"}, {"t": 77.4, "lat": 47.399919, "lon": 8.544702, "alt": 15.0, "mode": "MISSION"}, {"t": 78.0, "lat": 47.399932, "lon": 8.544708, "alt": 15.0, "mode": "MISSION"}, {"t": 78.6, "lat": 47.39994, "lon": 8.544729, "alt": 15.0, "mode": "MISSION"}, {"t": 79.2, "lat": 47.399943, "lon": 8.544754, "alt": 15.0, "mode": "MISSION"}, {"t": 79.8, "lat": 47.399945, "lon": 8.544779, "alt": 15.0, "mode": "MISSION"}, {"t": 80.4, "lat": 47.399946, "lon": 8.544815, "alt": 15.0, "mode": "MISSION"}, {"t": 81.0, "lat": 47.399946, "lon": 8.544854, "alt": 15.0, "mode": "MISSION"}, {"t": 81.6, "lat": 47.399946, "lon": 8.544892, "alt": 15.0, "mode": "MISSION"}, {"t": 82.2, "lat": 47.399947, "lon": 8.544931, "alt": 15.0, "mode": "MISSION"}, {"t": 82.8, "lat": 47.399946, "lon": 8.54497, "alt": 15.0, "mode": "MISSION"}, {"t": 83.4, "lat": 47.399946, "lon": 8.545009, "alt": 15.0, "mode": "MISSION"}, {"t": 84.0, "lat": 47.399946, "lon": 8.545049, "alt": 15.0, "mode": "MISSION"}, {"t": 84.6, "lat": 47.399946, "lon": 8.545089, "alt": 15.0, "mode": "MISSION"}, {"t": 85.2, "lat": 47.399946, "lon": 8.545129, "alt": 15.0, "mode": "MISSION"}, {"t": 85.8, "lat": 47.399946, "lon": 8.545169, "alt": 15.0, "mode": "MISSION"}, {"t": 86.4, "lat": 47.399947, "lon": 8.545209, "alt": 15.0, "mode": "MISSION"}, {"t": 87.0, "lat": 47.399947, "lon": 8.545249, "alt": 15.0, "mode": "MISSION"}, {"t": 87.6, "lat": 47.399947, "lon": 8.545289, "alt": 15.0, "mode": "MISSION"}, {"t": 88.2, "lat": 47.399947, "lon": 8.545329, "alt": 15.0, "mode": "MISSION"}, {"t": 88.8, "lat": 47.399947, "lon": 8.545369, "alt": 15.0, "mode": "MISSION"}, {"t": 89.4, "lat": 47.399947, "lon": 8.545408, "alt": 15.0, "mode": "MISSION"}, {"t": 90.0, "lat": 47.399947, "lon": 8.545448, "alt": 15.0, "mode": "MISSION"}, {"t": 90.6, "lat": 47.399948, "lon": 8.545488, "alt": 15.0, "mode": "MISSION"}, {"t": 91.2, "lat": 47.399948, "lon": 8.545528, "alt": 15.0, "mode": "MISSION"}, {"t": 91.8, "lat": 47.399948, "lon": 8.545568, "alt": 15.0, "mode": "MISSION"}, {"t": 92.4, "lat": 47.399948, "lon": 8.545607, "alt": 15.0, "mode": "MISSION"}, {"t": 93.0, "lat": 47.399948, "lon": 8.545647, "alt": 15.0, "mode": "MISSION"}, {"t": 93.6, "lat": 47.399949, "lon": 8.545687, "alt": 15.0, "mode": "MISSION"}, {"t": 94.2, "lat": 47.399949, "lon": 8.545727, "alt": 15.0, "mode": "MISSION"}, {"t": 94.8, "lat": 47.399949, "lon": 8.545767, "alt": 15.0, "mode": "MISSION"}, {"t": 95.4, "lat": 47.399949, "lon": 8.545806, "alt": 15.0, "mode": "MISSION"}, {"t": 95.62, "lat": 47.399949, "lon": 8.545818, "alt": 15.0, "mode": "MISSION"}, {"t": 95.64, "lat": 47.399949, "lon": 8.545819, "alt": 15.0, "mode": "MISSION"}, {"t": 95.66, "lat": 47.399949, "lon": 8.54582, "alt": 15.0, "mode": "MISSION"}, {"t": 95.68, "lat": 47.399949, "lon": 8.545821, "alt": 15.0, "mode": "MISSION"}, {"t": 95.7, "lat": 47.399949, "lon": 8.545822, "alt": 15.0, "mode": "MISSION"}, {"t": 95.72, "lat": 47.399949, "lon": 8.545823, "alt": 15.0, "mode": "MISSION"}, {"t": 95.74, "lat": 47.399949, "lon": 8.545824, "alt": 15.0, "mode": "MISSION"}, {"t": 95.76, "lat": 47.399949, "lon": 8.545825, "alt": 15.0, "mode": "MISSION"}, {"t": 95.78, "lat": 47.399949, "lon": 8.545826, "alt": 15.0, "mode": "MISSION"}, {"t": 95.8, "lat": 47.399949, "lon": 8.545827, "alt": 15.0, "mode": "MISSION"}, {"t": 95.82, "lat": 47.399949, "lon": 8.545828, "alt": 15.0, "mode": "MISSION"}, {"t": 95.84, "lat": 47.399949, "lon": 8.545829, "alt": 15.0, "mode": "MISSION"}, {"t": 95.86, "lat": 47.399949, "lon": 8.54583, "alt": 15.0, "mode": "MISSION"}, {"t": 95.88, "lat": 47.399949, "lon": 8.545831, "alt": 15.0, "mode": "MISSION"}, {"t": 95.9, "lat": 47.399949, "lon": 8.545832, "alt": 15.0, "mode": "MISSION"}, {"t": 95.92, "lat": 47.399949, "lon": 8.545833, "alt": 15.0, "mode": "MISSION"}, {"t": 95.94, "lat": 47.399949, "lon": 8.545833, "alt": 15.0, "mode": "MISSION"}, {"t": 95.96, "lat": 47.399949, "lon": 8.545834, "alt": 15.0, "mode": "MISSION"}, {"t": 95.98, "lat": 47.399949, "lon": 8.545835, "alt": 15.0, "mode": "MISSION"}, {"t": 96.0, "lat": 47.399949, "lon": 8.545836, "alt": 15.0, "mode": "MISSION"}, {"t": 96.02, "lat": 47.399949, "lon": 8.545837, "alt": 15.0, "mode": "MISSION"}, {"t": 96.04, "lat": 47.399949, "lon": 8.545838, "alt": 15.0, "mode": "MISSION"}, {"t": 96.06, "lat": 47.399949, "lon": 8.545839, "alt": 15.0, "mode": "MISSION"}, {"t": 96.08, "lat": 47.399949, "lon": 8.545839, "alt": 15.0, "mode": "MISSION"}, {"t": 96.1, "lat": 47.399949, "lon": 8.54584, "alt": 15.0, "mode": "MISSION"}, {"t": 96.12, "lat": 47.399949, "lon": 8.545841, "alt": 15.0, "mode": "MISSION"}, {"t": 96.14, "lat": 47.399949, "lon": 8.545842, "alt": 15.0, "mode": "MISSION"}, {"t": 96.16, "lat": 47.399949, "lon": 8.545843, "alt": 15.0, "mode": "MISSION"}, {"t": 96.18, "lat": 47.399949, "lon": 8.545844, "alt": 15.0, "mode": "MISSION"}, {"t": 96.2, "lat": 47.399949, "lon": 8.545844, "alt": 15.0, "mode": "MISSION"}, {"t": 96.6, "lat": 47.399949, "lon": 8.545858, "alt": 15.0, "mode": "MISSION"}, {"t": 97.2, "lat": 47.399949, "lon": 8.545871, "alt": 15.0, "mode": "HOLD"}, {"t": 97.8, "lat": 47.399949, "lon": 8.545877, "alt": 15.0, "mode": "HOLD"}, {"t": 98.4, "lat": 47.399949, "lon": 8.545883, "alt": 15.0, "mode": "HOLD"}, {"t": 99.0, "lat": 47.399949, "lon": 8.545887, "alt": 15.0, "mode": "HOLD"}, {"t": 99.6, "lat": 47.399949, "lon": 8.545889, "alt": 15.0, "mode": "HOLD"}, {"t": 100.2, "lat": 47.399946, "lon": 8.545884, "alt": 15.0, "mode": "MISSION"}, {"t": 100.8, "lat": 47.399935, "lon": 8.545869, "alt": 15.0, "mode": "MISSION"}, {"t": 101.4, "lat": 47.399915, "lon": 8.545846, "alt": 15.0, "mode": "MISSION"}, {"t": 102.0, "lat": 47.399894, "lon": 8.545822, "alt": 15.0, "mode": "MISSION"}, {"t": 102.6, "lat": 47.399874, "lon": 8.545801, "alt": 15.0, "mode": "MISSION"}, {"t": 103.2, "lat": 47.399854, "lon": 8.545778, "alt": 15.0, "mode": "MISSION"}, {"t": 103.8, "lat": 47.399833, "lon": 8.545755, "alt": 15.0, "mode": "MISSION"}, {"t": 104.4, "lat": 47.399812, "lon": 8.545731, "alt": 15.0, "mode": "MISSION"}, {"t": 105.0, "lat": 47.39979, "lon": 8.545707, "alt": 15.0, "mode": "MISSION"}, {"t": 105.6, "lat": 47.399769, "lon": 8.545683, "alt": 15.0, "mode": "MISSION"}, {"t": 106.2, "lat": 47.399752, "lon": 8.545663, "alt": 15.0, "mode": "MISSION"}, {"t": 106.8, "lat": 47.399738, "lon": 8.545644, "alt": 15.0, "mode": "MISSION"}, {"t": 107.4, "lat": 47.39973, "lon": 8.545615, "alt": 15.0, "mode": "MISSION"}, {"t": 108.0, "lat": 47.399728, "lon": 8.545582, "alt": 15.0, "mode": "MISSION"}, {"t": 108.6, "lat": 47.399728, "lon": 8.545544, "alt": 15.0, "mode": "MISSION"}, {"t": 109.2, "lat": 47.399727, "lon": 8.545505, "alt": 15.0, "mode": "MISSION"}, {"t": 109.8, "lat": 47.399725, "lon": 8.545467, "alt": 15.0, "mode": "MISSION"}, {"t": 110.4, "lat": 47.399724, "lon": 8.545436, "alt": 15.0, "mode": "MISSION"}, {"t": 111.0, "lat": 47.399723, "lon": 8.545411, "alt": 15.0, "mode": "MISSION"}, {"t": 111.6, "lat": 47.399718, "lon": 8.545393, "alt": 15.0, "mode": "MISSION"}, {"t": 112.2, "lat": 47.399703, "lon": 8.545381, "alt": 15.0, "mode": "MISSION"}, {"t": 112.8, "lat": 47.399686, "lon": 8.545375, "alt": 15.0, "mode": "MISSION"}, {"t": 113.4, "lat": 47.399669, "lon": 8.545372, "alt": 15.0, "mode": "MISSION"}, {"t": 114.0, "lat": 47.399644, "lon": 8.545372, "alt": 15.0, "mode": "MISSION"}, {"t": 114.6, "lat": 47.399617, "lon": 8.545371, "alt": 15.0, "mode": "MISSION"}, {"t": 115.2, "lat": 47.399591, "lon": 8.54537, "alt": 15.0, "mode": "MISSION"}, {"t": 115.8, "lat": 47.399565, "lon": 8.545371, "alt": 15.0, "mode": "MISSION"}, {"t": 116.4, "lat": 47.399539, "lon": 8.545371, "alt": 15.0, "mode": "MISSION"}, {"t": 117.0, "lat": 47.399512, "lon": 8.545372, "alt": 15.0, "mode": "MISSION"}, {"t": 117.6, "lat": 47.399485, "lon": 8.545372, "alt": 15.0, "mode": "MISSION"}, {"t": 118.2, "lat": 47.399458, "lon": 8.545372, "alt": 15.0, "mode": "MISSION"}, {"t": 118.8, "lat": 47.399431, "lon": 8.545372, "alt": 15.0, "mode": "MISSION"}, {"t": 119.4, "lat": 47.399404, "lon": 8.545372, "alt": 15.0, "mode": "MISSION"}, {"t": 120.0, "lat": 47.399377, "lon": 8.545372, "alt": 15.0, "mode": "MISSION"}, {"t": 120.6, "lat": 47.39935, "lon": 8.545372, "alt": 15.0, "mode": "MISSION"}, {"t": 121.2, "lat": 47.399323, "lon": 8.545371, "alt": 15.0, "mode": "MISSION"}, {"t": 121.8, "lat": 47.399296, "lon": 8.545371, "alt": 15.0, "mode": "MISSION"}, {"t": 122.4, "lat": 47.399269, "lon": 8.545371, "alt": 15.0, "mode": "MISSION"}, {"t": 123.0, "lat": 47.399242, "lon": 8.545371, "alt": 15.0, "mode": "MISSION"}, {"t": 123.6, "lat": 47.399215, "lon": 8.545371, "alt": 15.0, "mode": "MISSION"}, {"t": 124.2, "lat": 47.399188, "lon": 8.54537, "alt": 15.0, "mode": "MISSION"}, {"t": 124.8, "lat": 47.399161, "lon": 8.54537, "alt": 15.0, "mode": "MISSION"}, {"t": 125.4, "lat": 47.399134, "lon": 8.54537, "alt": 15.0, "mode": "MISSION"}, {"t": 126.0, "lat": 47.399107, "lon": 8.545369, "alt": 15.0, "mode": "MISSION"}, {"t": 126.6, "lat": 47.39908, "lon": 8.545369, "alt": 15.0, "mode": "MISSION"}, {"t": 127.2, "lat": 47.399054, "lon": 8.545369, "alt": 15.0, "mode": "MISSION"}, {"t": 127.8, "lat": 47.399027, "lon": 8.545369, "alt": 15.0, "mode": "MISSION"}, {"t": 128.4, "lat": 47.398999, "lon": 8.545369, "alt": 15.0, "mode": "MISSION"}, {"t": 129.0, "lat": 47.398972, "lon": 8.545369, "alt": 15.0, "mode": "MISSION"}, {"t": 129.6, "lat": 47.398946, "lon": 8.545369, "alt": 15.0, "mode": "MISSION"}, {"t": 130.2, "lat": 47.398919, "lon": 8.545369, "alt": 15.0, "mode": "MISSION"}, {"t": 130.8, "lat": 47.398891, "lon": 8.545369, "alt": 15.0, "mode": "MISSION"}, {"t": 131.4, "lat": 47.398864, "lon": 8.545368, "alt": 15.0, "mode": "MISSION"}, {"t": 132.0, "lat": 47.398838, "lon": 8.545368, "alt": 15.0, "mode": "MISSION"}, {"t": 132.6, "lat": 47.398811, "lon": 8.545368, "alt": 15.0, "mode": "MISSION"}, {"t": 133.2, "lat": 47.398784, "lon": 8.545368, "alt": 15.0, "mode": "MISSION"}, {"t": 133.8, "lat": 47.398757, "lon": 8.545368, "alt": 15.0, "mode": "MISSION"}, {"t": 134.4, "lat": 47.39873, "lon": 8.545368, "alt": 15.0, "mode": "MISSION"}, {"t": 135.0, "lat": 47.398703, "lon": 8.545367, "alt": 15.0, "mode": "MISSION"}, {"t": 135.6, "lat": 47.398676, "lon": 8.545367, "alt": 15.0, "mode": "MISSION"}, {"t": 136.2, "lat": 47.398649, "lon": 8.545367, "alt": 15.0, "mode": "MISSION"}, {"t": 136.8, "lat": 47.398622, "lon": 8.545366, "alt": 15.0, "mode": "MISSION"}, {"t": 137.4, "lat": 47.398599, "lon": 8.545366, "alt": 15.0, "mode": "MISSION"}, {"t": 138.0, "lat": 47.398582, "lon": 8.545366, "alt": 15.0, "mode": "MISSION"}, {"t": 138.6, "lat": 47.398569, "lon": 8.545374, "alt": 15.0, "mode": "MISSION"}, {"t": 139.2, "lat": 47.39856, "lon": 8.545396, "alt": 15.0, "mode": "MISSION"}, {"t": 139.8, "lat": 47.398554, "lon": 8.54542, "alt": 15.0, "mode": "MISSION"}, {"t": 140.4, "lat": 47.398549, "lon": 8.545449, "alt": 15.0, "mode": "MISSION"}, {"t": 141.0, "lat": 47.398544, "lon": 8.545487, "alt": 15.0, "mode": "MISSION"}, {"t": 141.6, "lat": 47.398539, "lon": 8.545525, "alt": 15.0, "mode": "MISSION"}, {"t": 142.2, "lat": 47.398533, "lon": 8.545562, "alt": 15.0, "mode": "MISSION"}, {"t": 142.8, "lat": 47.398528, "lon": 8.5456, "alt": 15.0, "mode": "MISSION"}, {"t": 143.4, "lat": 47.398523, "lon": 8.545639, "alt": 15.0, "mode": "MISSION"}, {"t": 144.0, "lat": 47.398519, "lon": 8.545678, "alt": 15.0, "mode": "MISSION"}, {"t": 144.6, "lat": 47.398514, "lon": 8.545716, "alt": 15.0, "mode": "MISSION"}, {"t": 145.2, "lat": 47.398509, "lon": 8.545756, "alt": 15.0, "mode": "MISSION"}, {"t": 145.8, "lat": 47.398503, "lon": 8.545795, "alt": 15.0, "mode": "MISSION"}, {"t": 146.4, "lat": 47.398498, "lon": 8.545834, "alt": 15.0, "mode": "MISSION"}, {"t": 147.0, "lat": 47.398493, "lon": 8.545873, "alt": 15.0, "mode": "MISSION"}, {"t": 147.6, "lat": 47.398488, "lon": 8.545913, "alt": 15.0, "mode": "MISSION"}, {"t": 148.2, "lat": 47.398483, "lon": 8.545952, "alt": 15.0, "mode": "MISSION"}, {"t": 148.8, "lat": 47.398478, "lon": 8.545991, "alt": 15.0, "mode": "MISSION"}, {"t": 149.4, "lat": 47.398472, "lon": 8.54603, "alt": 15.0, "mode": "MISSION"}, {"t": 150.0, "lat": 47.398467, "lon": 8.546069, "alt": 15.0, "mode": "MISSION"}, {"t": 150.6, "lat": 47.398462, "lon": 8.546108, "alt": 15.0, "mode": "MISSION"}, {"t": 151.2, "lat": 47.398457, "lon": 8.546147, "alt": 15.0, "mode": "MISSION"}, {"t": 151.8, "lat": 47.398452, "lon": 8.546186, "alt": 15.0, "mode": "MISSION"}, {"t": 152.41, "lat": 47.398446, "lon": 8.546225, "alt": 15.0, "mode": "MISSION"}, {"t": 153.0, "lat": 47.398441, "lon": 8.546264, "alt": 15.0, "mode": "MISSION"}, {"t": 153.6, "lat": 47.398436, "lon": 8.546304, "alt": 15.0, "mode": "MISSION"}, {"t": 154.2, "lat": 47.398431, "lon": 8.546342, "alt": 15.0, "mode": "MISSION"}, {"t": 154.8, "lat": 47.398426, "lon": 8.546382, "alt": 15.0, "mode": "MISSION"}, {"t": 155.4, "lat": 47.39842, "lon": 8.546421, "alt": 15.0, "mode": "MISSION"}, {"t": 156.0, "lat": 47.398415, "lon": 8.54646, "alt": 15.0, "mode": "MISSION"}, {"t": 156.6, "lat": 47.39841, "lon": 8.546499, "alt": 15.0, "mode": "MISSION"}, {"t": 157.2, "lat": 47.398404, "lon": 8.546538, "alt": 15.0, "mode": "MISSION"}, {"t": 157.8, "lat": 47.398399, "lon": 8.546577, "alt": 15.0, "mode": "MISSION"}, {"t": 158.4, "lat": 47.398394, "lon": 8.546616, "alt": 15.0, "mode": "MISSION"}, {"t": 159.0, "lat": 47.398389, "lon": 8.546656, "alt": 15.0, "mode": "MISSION"}, {"t": 159.6, "lat": 47.398384, "lon": 8.546695, "alt": 15.0, "mode": "MISSION"}, {"t": 160.2, "lat": 47.398378, "lon": 8.546734, "alt": 15.0, "mode": "MISSION"}, {"t": 160.8, "lat": 47.398373, "lon": 8.546772, "alt": 15.0, "mode": "MISSION"}, {"t": 161.4, "lat": 47.398368, "lon": 8.546812, "alt": 15.0, "mode": "MISSION"}, {"t": 162.0, "lat": 47.398363, "lon": 8.546851, "alt": 15.0, "mode": "MISSION"}, {"t": 162.6, "lat": 47.398358, "lon": 8.54689, "alt": 15.0, "mode": "MISSION"}, {"t": 163.2, "lat": 47.398352, "lon": 8.546929, "alt": 15.0, "mode": "MISSION"}, {"t": 163.8, "lat": 47.398347, "lon": 8.546968, "alt": 15.0, "mode": "MISSION"}, {"t": 164.4, "lat": 47.398343, "lon": 8.547005, "alt": 15.0, "mode": "MISSION"}, {"t": 165.0, "lat": 47.398338, "lon": 8.547034, "alt": 15.0, "mode": "MISSION"}, {"t": 165.6, "lat": 47.398336, "lon": 8.547055, "alt": 15.0, "mode": "MISSION"}, {"t": 166.2, "lat": 47.398341, "lon": 8.547071, "alt": 15.0, "mode": "MISSION"}, {"t": 166.8, "lat": 47.398356, "lon": 8.547079, "alt": 15.0, "mode": "MISSION"}, {"t": 167.4, "lat": 47.398371, "lon": 8.547084, "alt": 15.0, "mode": "MISSION"}, {"t": 168.01, "lat": 47.398387, "lon": 8.547088, "alt": 15.0, "mode": "MISSION"}, {"t": 168.61, "lat": 47.39841, "lon": 8.547089, "alt": 15.0, "mode": "MISSION"}, {"t": 169.21, "lat": 47.398437, "lon": 8.547088, "alt": 15.0, "mode": "MISSION"}, {"t": 169.81, "lat": 47.398463, "lon": 8.547089, "alt": 15.0, "mode": "MISSION"}, {"t": 170.41, "lat": 47.398488, "lon": 8.547089, "alt": 15.0, "mode": "MISSION"}, {"t": 171.01, "lat": 47.398514, "lon": 8.547089, "alt": 15.0, "mode": "MISSION"}, {"t": 171.61, "lat": 47.398541, "lon": 8.547089, "alt": 15.0, "mode": "MISSION"}, {"t": 172.21, "lat": 47.398567, "lon": 8.547088, "alt": 15.0, "mode": "MISSION"}, {"t": 172.81, "lat": 47.398594, "lon": 8.547088, "alt": 15.0, "mode": "MISSION"}, {"t": 173.41, "lat": 47.398621, "lon": 8.547088, "alt": 15.0, "mode": "MISSION"}, {"t": 174.01, "lat": 47.398648, "lon": 8.547088, "alt": 15.0, "mode": "MISSION"}, {"t": 174.61, "lat": 47.398675, "lon": 8.547088, "alt": 15.0, "mode": "MISSION"}, {"t": 175.21, "lat": 47.398702, "lon": 8.547088, "alt": 15.0, "mode": "MISSION"}, {"t": 175.81, "lat": 47.398729, "lon": 8.547088, "alt": 15.0, "mode": "MISSION"}, {"t": 176.41, "lat": 47.398756, "lon": 8.547088, "alt": 15.0, "mode": "MISSION"}, {"t": 177.01, "lat": 47.398783, "lon": 8.547089, "alt": 15.0, "mode": "MISSION"}, {"t": 177.61, "lat": 47.39881, "lon": 8.547089, "alt": 15.0, "mode": "MISSION"}, {"t": 178.21, "lat": 47.398837, "lon": 8.547089, "alt": 15.0, "mode": "MISSION"}, {"t": 178.81, "lat": 47.398864, "lon": 8.547089, "alt": 15.0, "mode": "MISSION"}, {"t": 179.41, "lat": 47.398891, "lon": 8.547089, "alt": 15.0, "mode": "MISSION"}, {"t": 180.01, "lat": 47.398918, "lon": 8.547089, "alt": 15.0, "mode": "MISSION"}, {"t": 180.61, "lat": 47.398945, "lon": 8.54709, "alt": 15.0, "mode": "MISSION"}, {"t": 181.21, "lat": 47.398972, "lon": 8.54709, "alt": 15.0, "mode": "MISSION"}, {"t": 181.81, "lat": 47.398999, "lon": 8.54709, "alt": 15.0, "mode": "MISSION"}, {"t": 182.41, "lat": 47.399026, "lon": 8.54709, "alt": 15.0, "mode": "MISSION"}, {"t": 183.01, "lat": 47.399053, "lon": 8.54709, "alt": 15.0, "mode": "MISSION"}, {"t": 183.61, "lat": 47.39908, "lon": 8.54709, "alt": 15.0, "mode": "MISSION"}, {"t": 184.21, "lat": 47.399107, "lon": 8.54709, "alt": 15.0, "mode": "MISSION"}, {"t": 184.81, "lat": 47.399134, "lon": 8.54709, "alt": 15.0, "mode": "MISSION"}, {"t": 185.41, "lat": 47.399161, "lon": 8.54709, "alt": 15.0, "mode": "MISSION"}, {"t": 186.01, "lat": 47.399188, "lon": 8.54709, "alt": 15.0, "mode": "MISSION"}, {"t": 186.61, "lat": 47.399215, "lon": 8.54709, "alt": 15.0, "mode": "MISSION"}, {"t": 187.21, "lat": 47.399241, "lon": 8.547091, "alt": 15.0, "mode": "MISSION"}, {"t": 187.81, "lat": 47.399268, "lon": 8.547091, "alt": 15.0, "mode": "MISSION"}, {"t": 188.41, "lat": 47.399296, "lon": 8.547091, "alt": 15.0, "mode": "MISSION"}, {"t": 189.01, "lat": 47.399323, "lon": 8.547091, "alt": 15.0, "mode": "MISSION"}, {"t": 189.61, "lat": 47.39935, "lon": 8.547091, "alt": 15.0, "mode": "MISSION"}, {"t": 190.21, "lat": 47.399377, "lon": 8.547091, "alt": 15.0, "mode": "MISSION"}, {"t": 190.81, "lat": 47.399404, "lon": 8.547091, "alt": 15.0, "mode": "MISSION"}, {"t": 191.41, "lat": 47.399431, "lon": 8.547091, "alt": 15.0, "mode": "MISSION"}, {"t": 192.01, "lat": 47.399457, "lon": 8.547091, "alt": 15.0, "mode": "MISSION"}, {"t": 192.61, "lat": 47.399484, "lon": 8.547091, "alt": 15.0, "mode": "MISSION"}, {"t": 193.21, "lat": 47.399512, "lon": 8.547091, "alt": 15.0, "mode": "MISSION"}, {"t": 193.81, "lat": 47.399539, "lon": 8.547092, "alt": 15.0, "mode": "MISSION"}, {"t": 194.41, "lat": 47.399566, "lon": 8.547092, "alt": 15.0, "mode": "MISSION"}, {"t": 195.01, "lat": 47.399593, "lon": 8.547092, "alt": 15.0, "mode": "MISSION"}, {"t": 195.61, "lat": 47.39962, "lon": 8.547092, "alt": 15.0, "mode": "MISSION"}, {"t": 196.21, "lat": 47.399647, "lon": 8.547092, "alt": 15.0, "mode": "MISSION"}, {"t": 196.81, "lat": 47.399674, "lon": 8.547092, "alt": 15.0, "mode": "MISSION"}, {"t": 197.41, "lat": 47.399701, "lon": 8.547093, "alt": 15.0, "mode": "MISSION"}, {"t": 198.01, "lat": 47.399727, "lon": 8.547092, "alt": 15.0, "mode": "MISSION"}, {"t": 198.61, "lat": 47.399755, "lon": 8.547093, "alt": 15.0, "mode": "MISSION"}, {"t": 199.21, "lat": 47.399781, "lon": 8.547093, "alt": 15.0, "mode": "MISSION"}, {"t": 199.81, "lat": 47.399808, "lon": 8.547093, "alt": 15.0, "mode": "MISSION"}, {"t": 200.41, "lat": 47.399835, "lon": 8.547093, "alt": 15.0, "mode": "MISSION"}, {"t": 201.01, "lat": 47.399862, "lon": 8.547093, "alt": 15.0, "mode": "MISSION"}, {"t": 201.61, "lat": 47.399886, "lon": 8.547093, "alt": 15.0, "mode": "MISSION"}, {"t": 202.21, "lat": 47.399904, "lon": 8.547093, "alt": 15.0, "mode": "MISSION"}, {"t": 202.81, "lat": 47.399918, "lon": 8.547093, "alt": 15.0, "mode": "MISSION"}, {"t": 203.41, "lat": 47.399928, "lon": 8.547093, "alt": 15.0, "mode": "HOLD"}, {"t": 204.01, "lat": 47.399936, "lon": 8.547093, "alt": 15.0, "mode": "HOLD"}, {"t": 204.61, "lat": 47.399941, "lon": 8.547093, "alt": 15.0, "mode": "HOLD"}, {"t": 205.21, "lat": 47.399945, "lon": 8.547093, "alt": 15.0, "mode": "HOLD"}, {"t": 205.25, "lat": 47.399945, "lon": 8.547094, "alt": 15.0, "mode": "HOLD"}]}, "battery_critical": {"scenario": "battery_critical", "condition": "adaptive", "severity": "moderate", "home": [47.397971, 8.546163], "mission": [{"lat": 47.3979706, "lon": 8.5461633, "alt": 15.0, "kind": "TAKEOFF", "label": null}, {"lat": 47.4014706, "lon": 8.5461633, "alt": 15.0, "kind": "NAV", "label": null}, {"lat": 47.4049706, "lon": 8.5461633, "alt": 15.0, "kind": "NAV", "label": null}, {"lat": 47.4084706, "lon": 8.5461633, "alt": 15.0, "kind": "NAV", "label": null}], "detected_percent": 15.0, "t_to_detect_s": 52.0, "event_outcome": "rtl", "t_replan_trigger": 52.03130422999675, "t_to_safe_recovery_s": 75.0, "series": [{"t": 0.02, "lat": 47.397971, "lon": 8.546164, "alt": 0.0, "mode": null}, {"t": 0.6, "lat": 47.397971, "lon": 8.546164, "alt": 0.0, "mode": null}, {"t": 1.2, "lat": 47.397971, "lon": 8.546164, "alt": 0.0, "mode": "MISSION"}, {"t": 1.8, "lat": 47.397971, "lon": 8.546164, "alt": -0.0, "mode": "MISSION"}, {"t": 2.4, "lat": 47.397971, "lon": 8.546164, "alt": 0.0, "mode": "MISSION"}, {"t": 3.0, "lat": 47.397971, "lon": 8.546164, "alt": 0.0, "mode": "MISSION"}, {"t": 3.6, "lat": 47.397971, "lon": 8.546164, "alt": 0.0, "mode": "MISSION"}, {"t": 4.2, "lat": 47.397971, "lon": 8.546164, "alt": 0.0, "mode": "MISSION"}, {"t": 4.8, "lat": 47.397971, "lon": 8.546164, "alt": 0.1, "mode": "MISSION"}, {"t": 5.4, "lat": 47.397971, "lon": 8.546164, "alt": 0.6, "mode": "MISSION"}, {"t": 6.0, "lat": 47.397971, "lon": 8.546164, "alt": 1.2, "mode": "MISSION"}, {"t": 6.6, "lat": 47.397971, "lon": 8.546164, "alt": 1.9, "mode": "MISSION"}, {"t": 7.2, "lat": 47.397971, "lon": 8.546164, "alt": 2.7, "mode": "MISSION"}, {"t": 7.8, "lat": 47.397971, "lon": 8.546164, "alt": 3.5, "mode": "MISSION"}, {"t": 8.4, "lat": 47.397971, "lon": 8.546164, "alt": 4.3, "mode": "MISSION"}, {"t": 9.0, "lat": 47.397971, "lon": 8.546164, "alt": 5.2, "mode": "MISSION"}, {"t": 9.6, "lat": 47.397971, "lon": 8.546164, "alt": 6.0, "mode": "MISSION"}, {"t": 10.2, "lat": 47.397971, "lon": 8.546164, "alt": 6.9, "mode": "MISSION"}, {"t": 10.8, "lat": 47.397971, "lon": 8.546164, "alt": 7.8, "mode": "MISSION"}, {"t": 11.4, "lat": 47.397971, "lon": 8.546164, "alt": 8.7, "mode": "MISSION"}, {"t": 12.0, "lat": 47.397971, "lon": 8.546164, "alt": 9.6, "mode": "MISSION"}, {"t": 12.6, "lat": 47.397971, "lon": 8.546164, "alt": 10.6, "mode": "MISSION"}, {"t": 13.2, "lat": 47.397971, "lon": 8.546164, "alt": 11.8, "mode": "MISSION"}, {"t": 13.8, "lat": 47.397971, "lon": 8.546164, "alt": 12.6, "mode": "MISSION"}, {"t": 14.4, "lat": 47.397971, "lon": 8.546164, "alt": 13.2, "mode": "MISSION"}, {"t": 15.0, "lat": 47.397971, "lon": 8.546164, "alt": 13.6, "mode": "MISSION"}, {"t": 15.6, "lat": 47.397971, "lon": 8.546164, "alt": 14.0, "mode": "MISSION"}, {"t": 16.2, "lat": 47.397971, "lon": 8.546164, "alt": 14.2, "mode": "MISSION"}, {"t": 16.8, "lat": 47.397971, "lon": 8.546164, "alt": 14.5, "mode": "MISSION"}, {"t": 17.4, "lat": 47.397978, "lon": 8.546163, "alt": 14.6, "mode": "MISSION"}, {"t": 18.0, "lat": 47.397994, "lon": 8.546161, "alt": 14.7, "mode": "MISSION"}, {"t": 18.6, "lat": 47.398019, "lon": 8.54616, "alt": 14.7, "mode": "MISSION"}, {"t": 19.2, "lat": 47.398045, "lon": 8.546161, "alt": 14.7, "mode": "MISSION"}, {"t": 19.8, "lat": 47.398069, "lon": 8.546162, "alt": 14.7, "mode": "MISSION"}, {"t": 20.4, "lat": 47.398095, "lon": 8.546163, "alt": 14.7, "mode": "MISSION"}, {"t": 21.01, "lat": 47.398121, "lon": 8.546164, "alt": 14.7, "mode": "MISSION"}, {"t": 21.61, "lat": 47.398148, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 22.21, "lat": 47.398175, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 22.81, "lat": 47.398202, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 23.42, "lat": 47.398229, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 24.01, "lat": 47.398253, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 24.61, "lat": 47.39828, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 25.21, "lat": 47.398307, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 25.81, "lat": 47.398334, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 26.4, "lat": 47.39836, "lon": 8.546164, "alt": 14.7, "mode": "MISSION"}, {"t": 27.0, "lat": 47.398387, "lon": 8.546164, "alt": 14.7, "mode": "MISSION"}, {"t": 27.6, "lat": 47.398414, "lon": 8.546164, "alt": 14.7, "mode": "MISSION"}, {"t": 28.2, "lat": 47.398441, "lon": 8.546164, "alt": 14.7, "mode": "MISSION"}, {"t": 28.8, "lat": 47.398468, "lon": 8.546164, "alt": 14.7, "mode": "MISSION"}, {"t": 29.4, "lat": 47.398494, "lon": 8.546164, "alt": 14.7, "mode": "MISSION"}, {"t": 30.0, "lat": 47.398521, "lon": 8.546163, "alt": 14.7, "mode": "MISSION"}, {"t": 30.6, "lat": 47.398548, "lon": 8.546164, "alt": 14.7, "mode": "MISSION"}, {"t": 31.2, "lat": 47.398576, "lon": 8.546164, "alt": 14.7, "mode": "MISSION"}, {"t": 31.8, "lat": 47.398603, "lon": 8.546164, "alt": 14.7, "mode": "MISSION"}, {"t": 32.4, "lat": 47.39863, "lon": 8.546164, "alt": 14.7, "mode": "MISSION"}, {"t": 33.0, "lat": 47.398657, "lon": 8.546164, "alt": 14.7, "mode": "MISSION"}, {"t": 33.6, "lat": 47.398683, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 34.2, "lat": 47.39871, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 34.8, "lat": 47.398737, "lon": 8.546164, "alt": 14.7, "mode": "MISSION"}, {"t": 35.4, "lat": 47.398764, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 36.0, "lat": 47.398791, "lon": 8.546163, "alt": 14.8, "mode": "MISSION"}, {"t": 36.6, "lat": 47.398818, "lon": 8.546163, "alt": 14.8, "mode": "MISSION"}, {"t": 37.2, "lat": 47.398846, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 37.8, "lat": 47.398872, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 38.4, "lat": 47.398899, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 39.0, "lat": 47.398926, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 39.6, "lat": 47.398953, "lon": 8.546163, "alt": 14.8, "mode": "MISSION"}, {"t": 40.2, "lat": 47.398981, "lon": 8.546163, "alt": 14.8, "mode": "MISSION"}, {"t": 40.8, "lat": 47.399007, "lon": 8.546163, "alt": 14.8, "mode": "MISSION"}, {"t": 41.4, "lat": 47.399034, "lon": 8.546163, "alt": 14.8, "mode": "MISSION"}, {"t": 42.0, "lat": 47.399061, "lon": 8.546163, "alt": 14.8, "mode": "MISSION"}, {"t": 42.6, "lat": 47.399088, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 43.2, "lat": 47.399116, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 43.8, "lat": 47.399142, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 44.4, "lat": 47.399169, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 45.0, "lat": 47.399196, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 45.6, "lat": 47.399223, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 46.2, "lat": 47.39925, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 46.8, "lat": 47.399277, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 47.4, "lat": 47.399304, "lon": 8.546163, "alt": 14.8, "mode": "MISSION"}, {"t": 48.0, "lat": 47.399331, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 48.6, "lat": 47.399358, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 49.2, "lat": 47.399385, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 49.8, "lat": 47.399412, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 50.4, "lat": 47.399439, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 51.0, "lat": 47.399466, "lon": 8.546163, "alt": 14.8, "mode": "MISSION"}, {"t": 51.6, "lat": 47.399493, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 51.74, "lat": 47.399499, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 51.76, "lat": 47.3995, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 51.78, "lat": 47.399501, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 51.8, "lat": 47.399502, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 51.82, "lat": 47.399502, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 51.84, "lat": 47.399503, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 51.86, "lat": 47.399504, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 51.88, "lat": 47.399505, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 51.9, "lat": 47.399506, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 51.92, "lat": 47.399507, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 51.94, "lat": 47.399508, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 51.96, "lat": 47.399509, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 51.98, "lat": 47.39951, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 52.0, "lat": 47.399511, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 52.02, "lat": 47.399511, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 52.04, "lat": 47.399513, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 52.06, "lat": 47.399513, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 52.08, "lat": 47.399514, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 52.1, "lat": 47.399515, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 52.12, "lat": 47.399516, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 52.14, "lat": 47.399517, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 52.16, "lat": 47.399518, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 52.18, "lat": 47.399519, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 52.2, "lat": 47.39952, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 52.22, "lat": 47.399521, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 52.24, "lat": 47.399522, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 52.26, "lat": 47.399522, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 52.28, "lat": 47.399524, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 52.3, "lat": 47.399524, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 52.32, "lat": 47.399525, "lon": 8.546164, "alt": 14.8, "mode": "MISSION"}, {"t": 52.8, "lat": 47.399546, "lon": 8.546163, "alt": 15.1, "mode": "MISSION"}, {"t": 53.4, "lat": 47.399563, "lon": 8.546164, "alt": 15.8, "mode": "RETURN_TO_LAUNCH"}, {"t": 54.0, "lat": 47.399569, "lon": 8.546165, "alt": 17.0, "mode": "RETURN_TO_LAUNCH"}, {"t": 54.6, "lat": 47.399567, "lon": 8.546167, "alt": 18.5, "mode": "RETURN_TO_LAUNCH"}, {"t": 55.21, "lat": 47.399559, "lon": 8.546168, "alt": 20.1, "mode": "RETURN_TO_LAUNCH"}, {"t": 55.81, "lat": 47.399553, "lon": 8.546167, "alt": 21.7, "mode": "RETURN_TO_LAUNCH"}, {"t": 56.41, "lat": 47.399547, "lon": 8.546165, "alt": 23.3, "mode": "RETURN_TO_LAUNCH"}, {"t": 57.01, "lat": 47.399541, "lon": 8.546163, "alt": 24.8, "mode": "RETURN_TO_LAUNCH"}, {"t": 57.61, "lat": 47.399534, "lon": 8.546163, "alt": 25.9, "mode": "RETURN_TO_LAUNCH"}, {"t": 58.21, "lat": 47.39953, "lon": 8.546162, "alt": 26.8, "mode": "RETURN_TO_LAUNCH"}, {"t": 58.81, "lat": 47.399526, "lon": 8.546162, "alt": 27.6, "mode": "RETURN_TO_LAUNCH"}, {"t": 59.41, "lat": 47.399523, "lon": 8.546162, "alt": 28.1, "mode": "RETURN_TO_LAUNCH"}, {"t": 60.01, "lat": 47.39952, "lon": 8.546162, "alt": 28.6, "mode": "RETURN_TO_LAUNCH"}, {"t": 60.61, "lat": 47.399518, "lon": 8.546162, "alt": 28.9, "mode": "RETURN_TO_LAUNCH"}, {"t": 61.21, "lat": 47.399517, "lon": 8.546163, "alt": 29.2, "mode": "RETURN_TO_LAUNCH"}, {"t": 61.81, "lat": 47.399515, "lon": 8.546163, "alt": 29.4, "mode": "RETURN_TO_LAUNCH"}, {"t": 62.41, "lat": 47.399508, "lon": 8.546163, "alt": 29.6, "mode": "RETURN_TO_LAUNCH"}, {"t": 63.01, "lat": 47.39949, "lon": 8.546163, "alt": 29.7, "mode": "RETURN_TO_LAUNCH"}, {"t": 63.61, "lat": 47.399464, "lon": 8.546163, "alt": 29.7, "mode": "RETURN_TO_LAUNCH"}, {"t": 64.21, "lat": 47.399438, "lon": 8.546164, "alt": 29.7, "mode": "RETURN_TO_LAUNCH"}, {"t": 64.81, "lat": 47.399413, "lon": 8.546164, "alt": 29.7, "mode": "RETURN_TO_LAUNCH"}, {"t": 65.41, "lat": 47.399387, "lon": 8.546164, "alt": 29.7, "mode": "RETURN_TO_LAUNCH"}, {"t": 66.01, "lat": 47.399361, "lon": 8.546163, "alt": 29.7, "mode": "RETURN_TO_LAUNCH"}, {"t": 66.61, "lat": 47.399334, "lon": 8.546162, "alt": 29.7, "mode": "RETURN_TO_LAUNCH"}, {"t": 67.21, "lat": 47.399307, "lon": 8.546162, "alt": 29.7, "mode": "RETURN_TO_LAUNCH"}, {"t": 67.81, "lat": 47.39928, "lon": 8.546162, "alt": 29.7, "mode": "RETURN_TO_LAUNCH"}, {"t": 68.41, "lat": 47.399254, "lon": 8.546163, "alt": 29.7, "mode": "RETURN_TO_LAUNCH"}, {"t": 69.01, "lat": 47.399226, "lon": 8.546163, "alt": 29.7, "mode": "RETURN_TO_LAUNCH"}, {"t": 69.61, "lat": 47.399199, "lon": 8.546163, "alt": 29.7, "mode": "RETURN_TO_LAUNCH"}, {"t": 70.21, "lat": 47.399172, "lon": 8.546163, "alt": 29.7, "mode": "RETURN_TO_LAUNCH"}, {"t": 70.81, "lat": 47.399145, "lon": 8.546164, "alt": 29.7, "mode": "RETURN_TO_LAUNCH"}, {"t": 71.41, "lat": 47.399118, "lon": 8.546164, "alt": 29.7, "mode": "RETURN_TO_LAUNCH"}, {"t": 72.01, "lat": 47.399091, "lon": 8.546164, "alt": 29.7, "mode": "RETURN_TO_LAUNCH"}, {"t": 72.61, "lat": 47.399064, "lon": 8.546164, "alt": 29.7, "mode": "RETURN_TO_LAUNCH"}, {"t": 73.21, "lat": 47.399037, "lon": 8.546164, "alt": 29.8, "mode": "RETURN_TO_LAUNCH"}, {"t": 73.81, "lat": 47.39901, "lon": 8.546164, "alt": 29.8, "mode": "RETURN_TO_LAUNCH"}, {"t": 74.41, "lat": 47.398983, "lon": 8.546164, "alt": 29.8, "mode": "RETURN_TO_LAUNCH"}, {"t": 75.01, "lat": 47.398957, "lon": 8.546164, "alt": 29.8, "mode": "RETURN_TO_LAUNCH"}, {"t": 75.61, "lat": 47.39893, "lon": 8.546164, "alt": 29.8, "mode": "RETURN_TO_LAUNCH"}, {"t": 76.21, "lat": 47.398902, "lon": 8.546164, "alt": 29.8, "mode": "RETURN_TO_LAUNCH"}, {"t": 76.81, "lat": 47.398875, "lon": 8.546164, "alt": 29.8, "mode": "RETURN_TO_LAUNCH"}, {"t": 77.41, "lat": 47.398849, "lon": 8.546164, "alt": 29.8, "mode": "RETURN_TO_LAUNCH"}, {"t": 78.01, "lat": 47.398822, "lon": 8.546164, "alt": 29.8, "mode": "RETURN_TO_LAUNCH"}, {"t": 78.61, "lat": 47.398795, "lon": 8.546164, "alt": 29.8, "mode": "RETURN_TO_LAUNCH"}, {"t": 79.21, "lat": 47.398768, "lon": 8.546164, "alt": 29.8, "mode": "RETURN_TO_LAUNCH"}, {"t": 79.81, "lat": 47.39874, "lon": 8.546164, "alt": 29.8, "mode": "RETURN_TO_LAUNCH"}, {"t": 80.41, "lat": 47.398713, "lon": 8.546164, "alt": 29.8, "mode": "RETURN_TO_LAUNCH"}, {"t": 81.01, "lat": 47.398687, "lon": 8.546164, "alt": 29.8, "mode": "RETURN_TO_LAUNCH"}, {"t": 81.61, "lat": 47.39866, "lon": 8.546164, "alt": 29.8, "mode": "RETURN_TO_LAUNCH"}, {"t": 82.21, "lat": 47.398633, "lon": 8.546164, "alt": 29.8, "mode": "RETURN_TO_LAUNCH"}, {"t": 82.81, "lat": 47.398606, "lon": 8.546164, "alt": 29.9, "mode": "RETURN_TO_LAUNCH"}, {"t": 83.41, "lat": 47.398579, "lon": 8.546164, "alt": 29.9, "mode": "RETURN_TO_LAUNCH"}, {"t": 84.01, "lat": 47.398552, "lon": 8.546164, "alt": 29.9, "mode": "RETURN_TO_LAUNCH"}, {"t": 84.61, "lat": 47.398525, "lon": 8.546164, "alt": 29.9, "mode": "RETURN_TO_LAUNCH"}, {"t": 85.21, "lat": 47.398498, "lon": 8.546164, "alt": 29.9, "mode": "RETURN_TO_LAUNCH"}, {"t": 85.81, "lat": 47.398471, "lon": 8.546164, "alt": 29.9, "mode": "RETURN_TO_LAUNCH"}, {"t": 86.41, "lat": 47.398443, "lon": 8.546164, "alt": 29.9, "mode": "RETURN_TO_LAUNCH"}, {"t": 87.01, "lat": 47.398416, "lon": 8.546164, "alt": 29.9, "mode": "RETURN_TO_LAUNCH"}, {"t": 87.61, "lat": 47.39839, "lon": 8.546164, "alt": 29.9, "mode": "RETURN_TO_LAUNCH"}, {"t": 88.21, "lat": 47.398363, "lon": 8.546164, "alt": 29.9, "mode": "RETURN_TO_LAUNCH"}, {"t": 88.81, "lat": 47.398336, "lon": 8.546164, "alt": 29.9, "mode": "RETURN_TO_LAUNCH"}, {"t": 89.41, "lat": 47.398309, "lon": 8.546164, "alt": 29.9, "mode": "RETURN_TO_LAUNCH"}, {"t": 90.01, "lat": 47.398282, "lon": 8.546164, "alt": 29.9, "mode": "RETURN_TO_LAUNCH"}, {"t": 90.61, "lat": 47.398255, "lon": 8.546164, "alt": 29.9, "mode": "RETURN_TO_LAUNCH"}, {"t": 91.21, "lat": 47.398228, "lon": 8.546164, "alt": 29.9, "mode": "RETURN_TO_LAUNCH"}, {"t": 91.81, "lat": 47.398201, "lon": 8.546164, "alt": 30.0, "mode": "RETURN_TO_LAUNCH"}, {"t": 92.41, "lat": 47.398174, "lon": 8.546164, "alt": 30.0, "mode": "RETURN_TO_LAUNCH"}, {"t": 93.01, "lat": 47.398147, "lon": 8.546164, "alt": 30.0, "mode": "RETURN_TO_LAUNCH"}, {"t": 93.61, "lat": 47.39812, "lon": 8.546164, "alt": 30.0, "mode": "RETURN_TO_LAUNCH"}, {"t": 94.21, "lat": 47.398093, "lon": 8.546164, "alt": 30.0, "mode": "RETURN_TO_LAUNCH"}, {"t": 94.81, "lat": 47.398066, "lon": 8.546164, "alt": 30.0, "mode": "RETURN_TO_LAUNCH"}, {"t": 95.41, "lat": 47.398041, "lon": 8.546164, "alt": 30.0, "mode": "RETURN_TO_LAUNCH"}, {"t": 96.01, "lat": 47.398021, "lon": 8.546164, "alt": 30.0, "mode": "RETURN_TO_LAUNCH"}, {"t": 96.61, "lat": 47.398006, "lon": 8.546162, "alt": 30.0, "mode": "RETURN_TO_LAUNCH"}, {"t": 97.21, "lat": 47.397995, "lon": 8.546162, "alt": 30.0, "mode": "RETURN_TO_LAUNCH"}, {"t": 97.81, "lat": 47.397986, "lon": 8.546162, "alt": 30.0, "mode": "RETURN_TO_LAUNCH"}, {"t": 98.41, "lat": 47.39798, "lon": 8.546162, "alt": 29.6, "mode": "RETURN_TO_LAUNCH"}, {"t": 99.01, "lat": 47.397976, "lon": 8.546163, "alt": 28.8, "mode": "RETURN_TO_LAUNCH"}, {"t": 99.61, "lat": 47.397974, "lon": 8.546163, "alt": 27.9, "mode": "RETURN_TO_LAUNCH"}, {"t": 100.21, "lat": 47.397972, "lon": 8.546163, "alt": 27.1, "mode": "RETURN_TO_LAUNCH"}, {"t": 100.81, "lat": 47.397971, "lon": 8.546163, "alt": 26.2, "mode": "RETURN_TO_LAUNCH"}, {"t": 101.41, "lat": 47.397971, "lon": 8.546164, "alt": 25.3, "mode": "RETURN_TO_LAUNCH"}, {"t": 102.01, "lat": 47.397971, "lon": 8.546164, "alt": 24.4, "mode": "RETURN_TO_LAUNCH"}, {"t": 102.61, "lat": 47.397971, "lon": 8.546164, "alt": 23.5, "mode": "RETURN_TO_LAUNCH"}, {"t": 103.21, "lat": 47.397971, "lon": 8.546164, "alt": 22.6, "mode": "RETURN_TO_LAUNCH"}, {"t": 103.81, "lat": 47.397971, "lon": 8.546164, "alt": 21.7, "mode": "RETURN_TO_LAUNCH"}, {"t": 104.41, "lat": 47.397971, "lon": 8.546164, "alt": 20.8, "mode": "RETURN_TO_LAUNCH"}, {"t": 105.01, "lat": 47.397971, "lon": 8.546164, "alt": 19.9, "mode": "RETURN_TO_LAUNCH"}, {"t": 105.61, "lat": 47.397971, "lon": 8.546164, "alt": 19.0, "mode": "RETURN_TO_LAUNCH"}, {"t": 106.21, "lat": 47.397971, "lon": 8.546164, "alt": 18.1, "mode": "RETURN_TO_LAUNCH"}, {"t": 106.81, "lat": 47.397971, "lon": 8.546164, "alt": 17.2, "mode": "RETURN_TO_LAUNCH"}, {"t": 107.41, "lat": 47.397971, "lon": 8.546164, "alt": 16.3, "mode": "RETURN_TO_LAUNCH"}, {"t": 108.01, "lat": 47.397971, "lon": 8.546163, "alt": 15.4, "mode": "RETURN_TO_LAUNCH"}, {"t": 108.61, "lat": 47.397971, "lon": 8.546163, "alt": 14.5, "mode": "RETURN_TO_LAUNCH"}, {"t": 109.21, "lat": 47.397971, "lon": 8.546164, "alt": 13.6, "mode": "RETURN_TO_LAUNCH"}, {"t": 109.81, "lat": 47.397971, "lon": 8.546164, "alt": 12.7, "mode": "RETURN_TO_LAUNCH"}, {"t": 110.41, "lat": 47.397971, "lon": 8.546164, "alt": 11.8, "mode": "RETURN_TO_LAUNCH"}, {"t": 111.01, "lat": 47.397971, "lon": 8.546164, "alt": 10.9, "mode": "RETURN_TO_LAUNCH"}, {"t": 111.61, "lat": 47.397971, "lon": 8.546164, "alt": 10.0, "mode": "RETURN_TO_LAUNCH"}, {"t": 112.21, "lat": 47.397971, "lon": 8.546164, "alt": 9.2, "mode": "RETURN_TO_LAUNCH"}, {"t": 112.81, "lat": 47.397971, "lon": 8.546164, "alt": 8.4, "mode": "RETURN_TO_LAUNCH"}, {"t": 113.41, "lat": 47.397971, "lon": 8.546164, "alt": 7.7, "mode": "RETURN_TO_LAUNCH"}, {"t": 114.01, "lat": 47.397971, "lon": 8.546164, "alt": 7.0, "mode": "RETURN_TO_LAUNCH"}, {"t": 114.61, "lat": 47.397971, "lon": 8.546164, "alt": 6.4, "mode": "RETURN_TO_LAUNCH"}, {"t": 115.21, "lat": 47.397971, "lon": 8.546164, "alt": 5.9, "mode": "RETURN_TO_LAUNCH"}, {"t": 115.81, "lat": 47.397971, "lon": 8.546164, "alt": 5.4, "mode": "RETURN_TO_LAUNCH"}, {"t": 116.41, "lat": 47.397971, "lon": 8.546164, "alt": 5.0, "mode": "RETURN_TO_LAUNCH"}, {"t": 117.01, "lat": 47.397971, "lon": 8.546164, "alt": 4.5, "mode": "RETURN_TO_LAUNCH"}, {"t": 117.61, "lat": 47.397971, "lon": 8.546164, "alt": 4.1, "mode": "RETURN_TO_LAUNCH"}, {"t": 118.21, "lat": 47.397971, "lon": 8.546164, "alt": 3.7, "mode": "RETURN_TO_LAUNCH"}, {"t": 118.81, "lat": 47.397971, "lon": 8.546164, "alt": 3.3, "mode": "RETURN_TO_LAUNCH"}, {"t": 119.41, "lat": 47.397971, "lon": 8.546164, "alt": 2.9, "mode": "RETURN_TO_LAUNCH"}, {"t": 120.01, "lat": 47.397971, "lon": 8.546164, "alt": 2.4, "mode": "RETURN_TO_LAUNCH"}, {"t": 120.61, "lat": 47.397971, "lon": 8.546164, "alt": 2.0, "mode": "RETURN_TO_LAUNCH"}, {"t": 121.21, "lat": 47.397971, "lon": 8.546164, "alt": 1.6, "mode": "RETURN_TO_LAUNCH"}, {"t": 121.81, "lat": 47.397971, "lon": 8.546164, "alt": 1.2, "mode": "RETURN_TO_LAUNCH"}, {"t": 122.41, "lat": 47.397971, "lon": 8.546164, "alt": 0.8, "mode": "RETURN_TO_LAUNCH"}, {"t": 123.01, "lat": 47.397971, "lon": 8.546164, "alt": 0.4, "mode": "RETURN_TO_LAUNCH"}, {"t": 123.61, "lat": 47.397971, "lon": 8.546164, "alt": -0.0, "mode": "RETURN_TO_LAUNCH"}, {"t": 124.21, "lat": 47.397971, "lon": 8.546164, "alt": 0.0, "mode": "RETURN_TO_LAUNCH"}, {"t": 124.81, "lat": 47.397971, "lon": 8.546164, "alt": 0.0, "mode": "RETURN_TO_LAUNCH"}, {"t": 125.41, "lat": 47.397971, "lon": 8.546164, "alt": 0.0, "mode": "RETURN_TO_LAUNCH"}, {"t": 126.01, "lat": 47.397971, "lon": 8.546164, "alt": 0.0, "mode": "RETURN_TO_LAUNCH"}, {"t": 126.61, "lat": 47.397971, "lon": 8.546164, "alt": 0.0, "mode": "RETURN_TO_LAUNCH"}, {"t": 127.05, "lat": 47.397971, "lon": 8.546164, "alt": 0.0, "mode": "MISSION"}]}, "gps_degraded": {"scenario": "gps_degraded", "condition": "adaptive", "home": [47.397971, 8.546164], "mission": [{"lat": 47.397971, "lon": 8.546164, "alt": 15.0, "kind": "TAKEOFF", "label": null}, {"lat": 47.401471, "lon": 8.546164, "alt": 15.0, "kind": "NAV", "label": null}, {"lat": 47.404970999999996, "lon": 8.546164, "alt": 15.0, "kind": "NAV", "label": null}, {"lat": 47.408471, "lon": 8.546164, "alt": 15.0, "kind": "NAV", "label": null}], "detected_fix_type": "NO_GPS", "t_to_detect_s": 0.02, "event_outcome": "hold", "t_replan_trigger": 23.095856025000103, "t_to_safe_recovery_s": 6.8, "series": [{"t": 0.02, "lat": 47.397971, "lon": 8.546164, "alt": 0.0, "mode": null}, {"t": 0.6, "lat": 47.397971, "lon": 8.546164, "alt": -0.0, "mode": null}, {"t": 1.2, "lat": 47.397971, "lon": 8.546164, "alt": 0.0, "mode": "MISSION"}, {"t": 1.8, "lat": 47.397971, "lon": 8.546164, "alt": 0.0, "mode": "MISSION"}, {"t": 2.4, "lat": 47.397971, "lon": 8.546164, "alt": 0.0, "mode": "MISSION"}, {"t": 3.0, "lat": 47.397971, "lon": 8.546164, "alt": 0.0, "mode": "MISSION"}, {"t": 3.6, "lat": 47.397971, "lon": 8.546164, "alt": 0.0, "mode": "MISSION"}, {"t": 4.2, "lat": 47.397971, "lon": 8.546164, "alt": 0.0, "mode": "MISSION"}, {"t": 4.8, "lat": 47.397971, "lon": 8.546164, "alt": 0.1, "mode": "MISSION"}, {"t": 5.4, "lat": 47.397971, "lon": 8.546163, "alt": 0.6, "mode": "MISSION"}, {"t": 6.0, "lat": 47.397971, "lon": 8.546163, "alt": 1.2, "mode": "MISSION"}, {"t": 6.6, "lat": 47.397971, "lon": 8.546163, "alt": 1.9, "mode": "MISSION"}, {"t": 7.2, "lat": 47.397971, "lon": 8.546164, "alt": 2.7, "mode": "MISSION"}, {"t": 7.8, "lat": 47.397971, "lon": 8.546164, "alt": 3.5, "mode": "MISSION"}, {"t": 8.4, "lat": 47.397971, "lon": 8.546164, "alt": 4.3, "mode": "MISSION"}, {"t": 9.0, "lat": 47.397971, "lon": 8.546164, "alt": 5.2, "mode": "MISSION"}, {"t": 9.6, "lat": 47.397971, "lon": 8.546164, "alt": 6.0, "mode": "MISSION"}, {"t": 10.2, "lat": 47.397971, "lon": 8.546163, "alt": 6.9, "mode": "MISSION"}, {"t": 10.8, "lat": 47.397971, "lon": 8.546163, "alt": 7.8, "mode": "MISSION"}, {"t": 11.4, "lat": 47.397971, "lon": 8.546163, "alt": 8.7, "mode": "MISSION"}, {"t": 12.0, "lat": 47.397971, "lon": 8.546164, "alt": 9.5, "mode": "MISSION"}, {"t": 12.6, "lat": 47.397971, "lon": 8.546164, "alt": 10.4, "mode": "MISSION"}, {"t": 13.2, "lat": 47.397971, "lon": 8.546164, "alt": 11.7, "mode": "MISSION"}, {"t": 13.8, "lat": 47.397971, "lon": 8.546164, "alt": 12.5, "mode": "MISSION"}, {"t": 14.4, "lat": 47.397971, "lon": 8.546164, "alt": 13.1, "mode": "MISSION"}, {"t": 15.0, "lat": 47.397971, "lon": 8.546164, "alt": 13.6, "mode": "MISSION"}, {"t": 15.6, "lat": 47.397971, "lon": 8.546164, "alt": 14.0, "mode": "MISSION"}, {"t": 16.2, "lat": 47.397971, "lon": 8.546164, "alt": 14.2, "mode": "MISSION"}, {"t": 16.8, "lat": 47.397971, "lon": 8.546164, "alt": 14.4, "mode": "MISSION"}, {"t": 17.4, "lat": 47.397978, "lon": 8.546163, "alt": 14.6, "mode": "MISSION"}, {"t": 18.0, "lat": 47.397994, "lon": 8.546161, "alt": 14.7, "mode": "MISSION"}, {"t": 18.6, "lat": 47.398019, "lon": 8.546161, "alt": 14.7, "mode": "MISSION"}, {"t": 19.2, "lat": 47.398046, "lon": 8.546162, "alt": 14.7, "mode": "MISSION"}, {"t": 19.8, "lat": 47.39807, "lon": 8.546163, "alt": 14.7, "mode": "MISSION"}, {"t": 20.4, "lat": 47.398096, "lon": 8.546164, "alt": 14.7, "mode": "MISSION"}, {"t": 21.0, "lat": 47.398122, "lon": 8.546164, "alt": 14.7, "mode": "MISSION"}, {"t": 21.6, "lat": 47.398149, "lon": 8.546164, "alt": 14.7, "mode": "MISSION"}, {"t": 22.2, "lat": 47.398176, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 22.8, "lat": 47.398203, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 22.82, "lat": 47.398203, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 22.84, "lat": 47.398204, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 22.86, "lat": 47.398205, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 22.88, "lat": 47.398206, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 22.9, "lat": 47.398207, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 22.92, "lat": 47.398208, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 22.94, "lat": 47.398209, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 22.96, "lat": 47.39821, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 22.98, "lat": 47.39821, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 23.0, "lat": 47.398212, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 23.02, "lat": 47.398212, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 23.04, "lat": 47.398213, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 23.06, "lat": 47.398214, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 23.08, "lat": 47.398215, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 23.1, "lat": 47.398216, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 23.12, "lat": 47.398217, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 23.14, "lat": 47.398218, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 23.16, "lat": 47.398219, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 23.18, "lat": 47.398219, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 23.2, "lat": 47.398221, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 23.22, "lat": 47.398221, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 23.24, "lat": 47.398222, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 23.26, "lat": 47.398223, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 23.28, "lat": 47.398224, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 23.3, "lat": 47.398225, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 23.32, "lat": 47.398226, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 23.34, "lat": 47.398227, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 23.36, "lat": 47.398228, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 23.38, "lat": 47.398228, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 23.4, "lat": 47.39823, "lon": 8.546165, "alt": 14.7, "mode": "MISSION"}, {"t": 24.0, "lat": 47.398255, "lon": 8.546164, "alt": 14.7, "mode": "HOLD"}, {"t": 24.6, "lat": 47.398271, "lon": 8.546164, "alt": 14.7, "mode": "HOLD"}, {"t": 25.2, "lat": 47.398278, "lon": 8.546164, "alt": 14.7, "mode": "HOLD"}, {"t": 25.8, "lat": 47.398279, "lon": 8.546164, "alt": 14.7, "mode": "HOLD"}, {"t": 26.4, "lat": 47.398279, "lon": 8.546164, "alt": 14.7, "mode": "HOLD"}, {"t": 27.0, "lat": 47.39828, "lon": 8.546164, "alt": 14.7, "mode": "HOLD"}, {"t": 27.6, "lat": 47.39828, "lon": 8.546164, "alt": 14.7, "mode": "HOLD"}, {"t": 28.2, "lat": 47.398281, "lon": 8.546164, "alt": 14.7, "mode": "HOLD"}, {"t": 28.8, "lat": 47.398282, "lon": 8.546164, "alt": 14.3, "mode": "HOLD"}, {"t": 29.4, "lat": 47.398283, "lon": 8.546163, "alt": 13.8, "mode": "LAND"}, {"t": 29.92, "lat": 47.398283, "lon": 8.546162, "alt": 13.5, "mode": "LAND"}]}}, "comparison": {"battery-critical (moderate, 12%)": {"adaptive": {"n": 5, "completion": "0.0 +/- 0.0 (n=5)", "recovery_time": "75.4 +/- 0.5 (n=5)", "safe_rate": "5/5", "zone_never_entered_rate": "n/a"}, "baseline": {"n": 5, "completion": "0.0 +/- 0.0 (n=5)", "recovery_time": "75.1 +/- 0.1 (n=5)", "safe_rate": "5/5", "zone_never_entered_rate": "n/a"}}, "battery-critical (severe, ~5%)": {"adaptive": {"n": 5, "completion": "0.0 +/- 0.0 (n=5)", "recovery_time": "19.8 +/- 0.6 (n=5)", "safe_rate": "5/5", "zone_never_entered_rate": "n/a"}, "baseline": {"n": 5, "completion": "0.0 +/- 0.0 (n=5)", "recovery_time": "51.3 +/- 0.0 (n=5)", "safe_rate": "5/5", "zone_never_entered_rate": "n/a"}}, "gps-degradation": {"adaptive": {"n": 5, "completion": "0.0 +/- 0.0 (n=5)", "recovery_time": "6.7 +/- 0.2 (n=5)", "safe_rate": "5/5", "zone_never_entered_rate": "n/a"}, "baseline": {"n": 5, "completion": "0.0 +/- 0.0 (n=5)", "recovery_time": "n/a (n=0)", "safe_rate": "0/5", "zone_never_entered_rate": "n/a"}}, "no-fly-zone (coverage mission)": {"adaptive": {"n": 5, "completion": "83.3 +/- 0.0 (n=5)", "recovery_time": "n/a (n=0)", "safe_rate": "5/5", "zone_never_entered_rate": "5/5"}, "baseline": {"n": 5, "completion": "50.0 +/- 0.0 (n=5)", "recovery_time": "n/a (n=0)", "safe_rate": "4/5", "zone_never_entered_rate": "5/5"}}}};
 
-/* ---------------------------------------------------------------------- */
-/* geo helpers -- equirectangular local-meters projection, same approach  */
-/* as mission_planner/geo.py, so the drawn geometry matches the real one  */
-/* ---------------------------------------------------------------------- */
-const R_EARTH = 6371000.0;
-function toLocalXY(lat, lon, originLat, originLon){
-  const dLat = lat - originLat;
-  const dLon = lon - originLon;
-  const y = dLat * (Math.PI/180) * R_EARTH;
-  const x = dLon * (Math.PI/180) * R_EARTH * Math.cos(originLat * Math.PI/180);
-  return [x, y];
+/* ---- geo: equirectangular local metres, matching mission_planner/geo.py -- */
+const R_EARTH = 6371000;
+function localXY(lat, lon, oLat, oLon){
+  return [
+    (lon - oLon) * Math.PI/180 * R_EARTH * Math.cos(oLat * Math.PI/180),
+    (lat - oLat) * Math.PI/180 * R_EARTH
+  ];
 }
 
+/* ---- scenario copy + headline metrics (all figures from evaluation/RESULTS.md) */
 const SCENARIOS = [
-  { key:'no_fly_zone', label:'No-Fly Zone', short:'NFZ',
-    blurb:'A no-fly zone is announced mid-flight, straddling one row of a coverage sweep. <b>GroundLink detects the block, computes a detour around the zone, and continues the mission</b> — rather than aborting. The baseline system instead falls back to a blind return-to-launch, abandoning the remaining sweep.' },
-  { key:'battery_critical', label:'Battery Critical', short:'Battery',
-    blurb:'Battery drains toward a critical threshold mid-mission. <b>GroundLink detects the crossing via live telemetry and commands return-to-launch</b>, monitored through to a confirmed landing and disarm — not just a mode switch. Under a more severe drain, GroundLink instead lands immediately rather than risking an RTL that may not complete in time.' },
-  { key:'gps_degraded', label:'GPS Degraded', short:'GPS',
-    blurb:'GPS fix drops to NO_FIX mid-cruise (simulated satellite dropout). <b>GroundLink holds position immediately</b> rather than trying to navigate on an unreliable fix. The baseline&#39;s blind "always RTL" policy fails outright here — RTL depends on the very GPS fix that just broke.' },
+  {
+    key:'no_fly_zone', label:'No-fly zone', mapTitle:'Coverage sweep &mdash; zone appears mid-flight',
+    brief:'A restricted zone is announced partway through a coverage sweep, straddling one row of the pattern. '
+        + '<strong>GroundLink detects that the zone blocks the remaining route, plans a detour around it, and finishes the sweep.</strong> '
+        + 'The baseline system has one response to any failure &mdash; return to launch &mdash; so it abandons the rest of the survey.',
+    headline:{
+      eyebrow:'Measured outcome — no-fly zone',
+      metric:'Share of the planned survey actually completed',
+      adaptive:'83.3%', baseline:'50.0%',
+      delta:'+33.3 points covered',
+      foot:'Five trials per condition. The restricted zone was never entered in any of the ten flights — verified geometrically against every recorded position, not inferred from the outcome.'
+    }
+  },
+  {
+    key:'battery_critical', label:'Battery critical', mapTitle:'Outbound leg &mdash; battery crosses critical',
+    brief:'Battery falls to a critical level mid-mission. <strong>GroundLink detects the crossing from live telemetry and commands a return to launch</strong>, '
+        + 'then tracks it through to a confirmed touchdown and disarm rather than trusting the mode switch alone. '
+        + 'Under a steeper drain it lands on the spot instead, rather than gambling on a return it may not have the charge to finish.',
+    headline:{
+      eyebrow:'Measured outcome — severe battery drain',
+      metric:'Time from detection to a confirmed safe state',
+      adaptive:'19.8s', baseline:'51.3s',
+      delta:'2.6× faster to safe',
+      foot:'Five trials per condition. GroundLink lands immediately at this severity; the baseline attempts a full return-to-launch regardless of how little charge is left.'
+    }
+  },
+  {
+    key:'gps_degraded', label:'GPS degraded', mapTitle:'Cruise &mdash; GPS fix lost mid-leg',
+    brief:'The GPS fix drops out mid-cruise. <strong>GroundLink holds position immediately</strong> rather than navigating on a position estimate it can no longer trust. '
+        + 'The baseline reaches for return-to-launch, which is the one response that cannot work here &mdash; returning home depends on the fix that just failed.',
+    headline:{
+      eyebrow:'Measured outcome — GPS dropout',
+      metric:'Flights that reached a confirmed safe state',
+      adaptive:'5/5', baseline:'0/5',
+      delta:'Baseline never recovered',
+      foot:'Five trials per condition. In every baseline flight PX4 accepted the return-to-launch command, then overrode it to LAND within about five seconds, and distance to home did not close.'
+    }
+  }
 ];
 
-let current = null;      // active scenario data object
-let originLatLon = null;
-let playing = false;
-let playT = 0;            // seconds, real scenario time
-let speedMult = 8;
-let lastFrameTs = null;
-let maxT = 1;
-let projected = null;     // cached projection for current scenario
-let rafId = null;
+const SPEEDS = [1,2,4,8];
 
-/* ---------------------------------------------------------------------- */
-/* tabs                                                                    */
-/* ---------------------------------------------------------------------- */
-const tabsEl = document.getElementById('tabs');
-SCENARIOS.forEach((s, i) => {
-  const btn = document.createElement('button');
-  btn.className = 'tab';
-  btn.dataset.key = s.key;
-  btn.innerHTML = `<span>${s.label}</span>`;
-  btn.addEventListener('click', () => selectScenario(s.key));
-  tabsEl.appendChild(btn);
-});
-const indicator = document.createElement('div');
-indicator.className = 'tab-indicator';
-tabsEl.insertBefore(indicator, tabsEl.firstChild);
+/* ---- state ------------------------------------------------------------- */
+const S = {
+  key:null, sc:null, meta:null, proj:null,
+  t:0, maxT:1, playing:false, speed:4, raf:null, last:null,
+  layers:{ planned:true, flown:true, zone:true, rings:true },
+  nodes:{}
+};
 
-function positionIndicator(btn){
-  const tabsRect = tabsEl.getBoundingClientRect();
-  const r = btn.getBoundingClientRect();
-  indicator.style.left = (r.left - tabsRect.left) + 'px';
-  indicator.style.width = r.width + 'px';
+/* ---- svg helpers -------------------------------------------------------- */
+const SVGNS = 'http://www.w3.org/2000/svg';
+function mk(tag, attrs){
+  const n = document.createElementNS(SVGNS, tag);
+  if (attrs) for (const k in attrs) n.setAttribute(k, attrs[k]);
+  return n;
 }
 
-/* ---------------------------------------------------------------------- */
-/* projection + static geometry per scenario                              */
-/* ---------------------------------------------------------------------- */
-const VB_W = 1000, VB_H = 640, PAD = 70;
+const VW = 1000, VH = 600, INSET = 62;
 
 function buildProjection(sc){
   const [oLat, oLon] = sc.home;
   const pts = [];
-  sc.mission.forEach(wp => pts.push(toLocalXY(wp.lat, wp.lon, oLat, oLon)));
-  sc.series.forEach(p => pts.push(toLocalXY(p.lat, p.lon, oLat, oLon)));
-  if (sc.zone_boundary) sc.zone_boundary.forEach(([lat,lon]) => pts.push(toLocalXY(lat, lon, oLat, oLon)));
-  if (sc.replanned_waypoints) sc.replanned_waypoints.forEach(wp => pts.push(toLocalXY(wp.lat, wp.lon, oLat, oLon)));
+  sc.mission.forEach(w => pts.push(localXY(w.lat, w.lon, oLat, oLon)));
+  sc.series.forEach(p => pts.push(localXY(p.lat, p.lon, oLat, oLon)));
+  (sc.zone_boundary||[]).forEach(([a,b]) => pts.push(localXY(a, b, oLat, oLon)));
+  (sc.replanned_waypoints||[]).forEach(w => pts.push(localXY(w.lat, w.lon, oLat, oLon)));
 
-  let minX=Infinity, maxX=-Infinity, minY=Infinity, maxY=-Infinity;
-  pts.forEach(([x,y]) => { minX=Math.min(minX,x); maxX=Math.max(maxX,x); minY=Math.min(minY,y); maxY=Math.max(maxY,y); });
-  const spanX = Math.max(maxX-minX, 10), spanY = Math.max(maxY-minY, 10);
-  const availW = VB_W - PAD*2, availH = VB_H - PAD*2;
-  const scale = Math.min(availW/spanX, availH/spanY);
+  let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
+  pts.forEach(([x,y]) => { if(x<minX)minX=x; if(x>maxX)maxX=x; if(y<minY)minY=y; if(y>maxY)maxY=y; });
+  const spanX = Math.max(maxX-minX, 20), spanY = Math.max(maxY-minY, 20);
+  const scale = Math.min((VW-INSET*2)/spanX, (VH-INSET*2)/spanY);
   const cx = (minX+maxX)/2, cy = (minY+maxY)/2;
-
-  function proj([x,y]){
-    const sx = VB_W/2 + (x - cx) * scale;
-    const sy = VB_H/2 - (y - cy) * scale;   // flip Y: north (lat+) is up
-    return [sx, sy];
-  }
-  return { proj, scale, oLat, oLon };
-}
-
-function seriesAtTime(series, t){
-  // linear interpolation between the two bracketing samples
-  if (t <= series[0].t) return series[0];
-  if (t >= series[series.length-1].t) return series[series.length-1];
-  for (let i=0; i<series.length-1; i++){
-    const a = series[i], b = series[i+1];
-    if (t >= a.t && t <= b.t){
-      const f = (b.t - a.t) < 1e-6 ? 0 : (t - a.t) / (b.t - a.t);
-      return {
-        t, lat: a.lat + (b.lat-a.lat)*f, lon: a.lon + (b.lon-a.lon)*f,
-        alt: a.alt + (b.alt-a.alt)*f, mode: (f < 0.5 ? a.mode : b.mode),
-      };
+  return {
+    oLat, oLon, scale,
+    to(lat, lon){
+      const [x,y] = localXY(lat, lon, oLat, oLon);
+      return [ VW/2 + (x-cx)*scale, VH/2 - (y-cy)*scale ];   /* north is up */
     }
-  }
-  return series[series.length-1];
+  };
 }
 
-/* ---------------------------------------------------------------------- */
-/* SVG drawing                                                             */
-/* ---------------------------------------------------------------------- */
-const svg = document.getElementById('mapSvg');
-const NS = 'http://www.w3.org/2000/svg';
-function el(tag, attrs){
-  const e = document.createElementNS(NS, tag);
-  for (const k in attrs) e.setAttribute(k, attrs[k]);
-  return e;
+function sampleAt(series, t){
+  if (t <= series[0].t) return series[0];
+  const last = series[series.length-1];
+  if (t >= last.t) return last;
+  let lo = 0, hi = series.length-1;
+  while (hi - lo > 1){
+    const mid = (lo+hi) >> 1;
+    if (series[mid].t <= t) lo = mid; else hi = mid;
+  }
+  const a = series[lo], b = series[hi];
+  const span = b.t - a.t;
+  const f = span < 1e-6 ? 0 : (t - a.t)/span;
+  return {
+    t, lat:a.lat+(b.lat-a.lat)*f, lon:a.lon+(b.lon-a.lon)*f,
+    alt:a.alt+(b.alt-a.alt)*f, mode:(f < .5 ? a.mode : b.mode), idx:lo
+  };
 }
 
-let flownPathEl, droneEl, droneGlowEl, triggerMarkerEl, headingEl;
+/* ---- chart -------------------------------------------------------------- */
+function drawChart(){
+  const sc = S.sc, P = S.proj, svg = S.nodes.chart;
+  svg.textContent = '';
 
-function drawScenario(sc){
-  svg.innerHTML = '';
-  const P = buildProjection(sc);
-  projected = P;
-
-  // ---- background grid + distance rings from home ----
-  const gridLayer = el('g', {});
-  const [hx, hy] = P.proj(toLocalXY(sc.home[0], sc.home[1], sc.home[0], sc.home[1]));
-  for (let gx = 0; gx <= VB_W; gx += 40) gridLayer.appendChild(el('line', {x1:gx,y1:0,x2:gx,y2:VB_H, stroke:'#131a26', 'stroke-width':1}));
-  for (let gy = 0; gy <= VB_H; gy += 40) gridLayer.appendChild(el('line', {x1:0,y1:gy,x2:VB_W,y2:gy, stroke:'#131a26', 'stroke-width':1}));
-  [80,160,240].forEach(rm => {
-    const rr = rm * P.scale;
-    gridLayer.appendChild(el('circle', {cx:hx, cy:hy, r:rr, fill:'none', stroke:'#182035', 'stroke-width':1, 'stroke-dasharray':'3 5'}));
-    const lbl = el('text', {x:hx+6, y:hy-rr+12, fill:'#3a4358', 'font-size':9, 'font-family':'var(--mono)'});
-    lbl.textContent = rm + 'm';
-    gridLayer.appendChild(lbl);
-  });
-  svg.appendChild(gridLayer);
-
-  // compass
-  const compass = el('g', { transform:`translate(${VB_W-46},46)` });
-  compass.appendChild(el('circle', {r:20, fill:'#10141d', stroke:'#232a38', 'stroke-width':1}));
-  compass.appendChild(el('line', {x1:0,y1:10,x2:0,y2:-12, stroke:'#5b6577', 'stroke-width':1.4}));
-  compass.appendChild(el('path', {d:'M 0 -14 L -4 -7 L 4 -7 Z', fill:'#8b96a8'}));
-  const nlbl = el('text', {x:0, y:-18, fill:'#6c7690', 'font-size':10, 'text-anchor':'middle', 'font-family':'var(--mono)'});
-  nlbl.textContent = 'N';
-  compass.appendChild(nlbl);
-  svg.appendChild(compass);
-
-  // ---- no-fly zone polygon ----
-  if (sc.zone_boundary && sc.zone_boundary.length){
-    const zpts = sc.zone_boundary.map(([lat,lon]) => P.proj(toLocalXY(lat, lon, sc.home[0], sc.home[1])));
-    const zone = el('polygon', {
-      points: zpts.map(p=>p.join(',')).join(' '),
-      fill:'rgba(255,97,97,.10)', stroke:'var(--red)', 'stroke-width':1.6, 'stroke-dasharray':'5 4',
-    });
-    svg.appendChild(zone);
-    const zc = zpts.reduce((a,p)=>[a[0]+p[0]/zpts.length, a[1]+p[1]/zpts.length], [0,0]);
-    const zlabel = el('text', {x:zc[0], y:zc[1], fill:'#ff8a8a', 'font-size':10.5, 'text-anchor':'middle', 'font-family':'var(--mono)', 'font-weight':600});
-    zlabel.textContent = 'NO-FLY ZONE';
-    svg.appendChild(zlabel);
-  }
-
-  // ---- planned path (original mission waypoints) ----
-  const missionPts = sc.mission.map(wp => P.proj(toLocalXY(wp.lat, wp.lon, sc.home[0], sc.home[1])));
-  const planned = el('polyline', {
-    points: missionPts.map(p=>p.join(',')).join(' '),
-    fill:'none', stroke:'var(--amber)', 'stroke-width':2, 'stroke-dasharray':'2 6', 'stroke-linecap':'round', opacity:.85,
-  });
-  svg.appendChild(planned);
-  sc.mission.forEach((wp,i) => {
-    const [x,y] = missionPts[i];
-    const r = el('circle', {cx:x, cy:y, r: wp.kind==='TAKEOFF'?5:4, fill:'#0d1119', stroke:'var(--amber)', 'stroke-width':1.6});
-    svg.appendChild(r);
-  });
-
-  // ---- replanned detour path (nfz only) ----
-  if (sc.replanned_waypoints && sc.replanned_waypoints.length){
-    const rpts = sc.replanned_waypoints.map(wp => P.proj(toLocalXY(wp.lat, wp.lon, sc.home[0], sc.home[1])));
-    const detour = el('polyline', {
-      points: rpts.map(p=>p.join(',')).join(' '),
-      fill:'none', stroke:'var(--violet)', 'stroke-width':2.2, 'stroke-dasharray':'1 0', 'stroke-linecap':'round', opacity:.9,
-    });
-    svg.appendChild(detour);
-  }
-
-  // home marker
-  const home = el('g', {transform:`translate(${hx},${hy})`});
-  home.appendChild(el('circle', {r:7, fill:'#0d1119', stroke:'var(--text-0)', 'stroke-width':1.6}));
-  home.appendChild(el('circle', {r:2, fill:'var(--text-0)'}));
-  svg.appendChild(home);
-
-  // ---- actual flown path (progressive) ----
-  flownPathEl = el('polyline', { points:'', fill:'none', stroke:'var(--cyan)', 'stroke-width':3, 'stroke-linecap':'round', 'stroke-linejoin':'round', filter:'url(#glow)' });
-  svg.appendChild(flownPathEl);
-
-  // glow filter
-  const defs = el('defs', {});
-  const filt = el('filter', {id:'glow', x:'-50%', y:'-50%', width:'200%', height:'200%'});
-  filt.appendChild(el('feGaussianBlur', {stdDeviation:'2.2', result:'blur'}));
-  const merge = el('feMerge', {});
-  merge.appendChild(el('feMergeNode', {in:'blur'}));
-  merge.appendChild(el('feMergeNode', {in:'SourceGraphic'}));
-  filt.appendChild(merge);
-  defs.appendChild(filt);
+  const defs = mk('defs');
+  const hatch = mk('pattern', {id:'zoneHatch', width:7, height:7, patternUnits:'userSpaceOnUse', patternTransform:'rotate(45)'});
+  hatch.appendChild(mk('line', {x1:0, y1:0, x2:0, y2:7, stroke:'var(--alert)', 'stroke-width':1, opacity:.34}));
+  defs.appendChild(hatch);
   svg.appendChild(defs);
 
-  // trigger marker (hidden until playback reaches it)
-  triggerMarkerEl = el('g', {opacity:0});
-  const pulse = el('circle', {r:8, fill:'none', stroke:'var(--amber)', 'stroke-width':2});
-  pulse.style.transformOrigin = 'center';
-  pulse.style.animation = 'pulse-ring 1.6s ease-out infinite';
-  triggerMarkerEl.appendChild(pulse);
-  triggerMarkerEl.appendChild(el('circle', {r:5, fill:'var(--amber)'}));
-  const tlabel = el('text', {y:-14, fill:'var(--amber)', 'font-size':10.5, 'text-anchor':'middle', 'font-family':'var(--mono)', 'font-weight':700});
-  tlabel.textContent = 'REPLAN';
-  triggerMarkerEl.appendChild(tlabel);
-  svg.appendChild(triggerMarkerEl);
+  /* graticule */
+  const grid = mk('g', {'shape-rendering':'crispEdges'});
+  for (let x=0; x<=VW; x+=50) grid.appendChild(mk('line',{x1:x,y1:0,x2:x,y2:VH,stroke:'var(--map-grid)','stroke-width':1}));
+  for (let y=0; y<=VH; y+=50) grid.appendChild(mk('line',{x1:0,y1:y,x2:VW,y2:y,stroke:'var(--map-grid)','stroke-width':1}));
+  svg.appendChild(grid);
 
-  // drone marker
-  droneGlowEl = el('circle', {r:11, fill:'var(--cyan)', opacity:.18});
-  svg.appendChild(droneGlowEl);
-  droneEl = el('g', {});
-  headingEl = el('path', {d:'M 0 -8 L 5.5 6 L 0 3 L -5.5 6 Z', fill:'var(--cyan)', stroke:'#04120f', 'stroke-width':.6});
-  droneEl.appendChild(headingEl);
-  svg.appendChild(droneEl);
-}
+  const [hx, hy] = P.to(sc.home[0], sc.home[1]);
 
-function updateFrame(){
-  const sc = current;
-  const pt = seriesAtTime(sc.series, playT);
-  const [x,y] = projected.proj(toLocalXY(pt.lat, pt.lon, sc.home[0], sc.home[1]));
+  /* range rings from launch point */
+  const rings = mk('g'); S.nodes.rings = rings;
+  [100, 200, 300].forEach(m => {
+    const r = m * P.scale;
+    if (r < 26 || r > 900) return;
+    rings.appendChild(mk('circle',{cx:hx, cy:hy, r, fill:'none', stroke:'var(--map-ring)', 'stroke-width':1, 'stroke-dasharray':'2 6'}));
+    const lb = mk('text',{x:hx+5, y:hy-r+11, fill:'var(--map-ring-ink)', 'font-size':9.5, 'font-family':'var(--mono)', 'letter-spacing':'.06em'});
+    lb.textContent = m + ' m';
+    rings.appendChild(lb);
+  });
+  svg.appendChild(rings);
 
-  // progressive flown path up to playT
-  const shown = sc.series.filter(p => p.t <= playT);
-  let ptsStr = shown.map(p => {
-    const [px,py] = projected.proj(toLocalXY(p.lat, p.lon, sc.home[0], sc.home[1]));
-    return px+','+py;
-  }).join(' ');
-  ptsStr += (ptsStr ? ' ' : '') + x + ',' + y;
-  flownPathEl.setAttribute('points', ptsStr);
+  /* north arrow */
+  const rose = mk('g', {transform:`translate(${VW-40},40)`});
+  rose.appendChild(mk('line',{x1:0,y1:9,x2:0,y2:-11,stroke:'var(--map-ring-ink)','stroke-width':1.2}));
+  rose.appendChild(mk('path',{d:'M0 -14 L-3.4 -6.5 L3.4 -6.5 Z', fill:'var(--map-ring-ink)'}));
+  const nt = mk('text',{x:0,y:-19,fill:'var(--map-ring-ink)','font-size':9.5,'text-anchor':'middle','font-family':'var(--mono)','letter-spacing':'.1em'});
+  nt.textContent='N'; rose.appendChild(nt);
+  svg.appendChild(rose);
 
-  // heading from last small delta
-  let heading = 0;
-  const idx = Math.max(0, shown.length-1);
-  if (shown.length){
-    const prev = shown.length>1 ? shown[shown.length-2] : shown[shown.length-1];
-    const [px,py] = projected.proj(toLocalXY(prev.lat, prev.lon, sc.home[0], sc.home[1]));
-    const dx = x-px, dy = y-py;
-    if (Math.hypot(dx,dy) > 0.4) heading = Math.atan2(dx, -dy) * 180/Math.PI;
+  /* restricted zone */
+  const zoneG = mk('g'); S.nodes.zone = zoneG;
+  if (sc.zone_boundary && sc.zone_boundary.length){
+    const zp = sc.zone_boundary.map(([a,b]) => P.to(a,b));
+    const pstr = zp.map(p=>p[0].toFixed(1)+','+p[1].toFixed(1)).join(' ');
+    zoneG.appendChild(mk('polygon',{points:pstr, fill:'url(#zoneHatch)', stroke:'var(--alert)', 'stroke-width':1.4}));
+    const cxz = zp.reduce((s,p)=>s+p[0],0)/zp.length, cyz = zp.reduce((s,p)=>s+p[1],0)/zp.length;
+    const zt = mk('text',{x:cxz, y:cyz, fill:'var(--alert)','font-size':10,'text-anchor':'middle','font-family':'var(--mono)','letter-spacing':'.16em'});
+    zt.textContent='RESTRICTED'; zoneG.appendChild(zt);
   }
-  droneEl.setAttribute('transform', `translate(${x},${y}) rotate(${heading})`);
-  droneGlowEl.setAttribute('cx', x); droneGlowEl.setAttribute('cy', y);
+  svg.appendChild(zoneG);
 
-  // trigger marker
-  if (sc.t_replan_trigger != null){
-    const tp = seriesAtTime(sc.series, sc.t_replan_trigger);
-    const [tx,ty] = projected.proj(toLocalXY(tp.lat, tp.lon, sc.home[0], sc.home[1]));
-    triggerMarkerEl.setAttribute('transform', `translate(${tx},${ty})`);
-    triggerMarkerEl.setAttribute('opacity', playT >= sc.t_replan_trigger ? 1 : 0);
+  /* planned route — dashed amber (a plan, not a track) */
+  const plannedG = mk('g'); S.nodes.planned = plannedG;
+  const mp = sc.mission.map(w => P.to(w.lat, w.lon));
+  plannedG.appendChild(mk('polyline',{
+    points: mp.map(p=>p[0].toFixed(1)+','+p[1].toFixed(1)).join(' '),
+    fill:'none', stroke:'var(--planned)', 'stroke-width':1.6, 'stroke-dasharray':'7 5', 'stroke-linejoin':'round'
+  }));
+  mp.forEach(([x,y]) => {
+    plannedG.appendChild(mk('circle',{cx:x, cy:y, r:3.2, fill:'var(--map-bg)', stroke:'var(--planned)', 'stroke-width':1.4}));
+  });
+  /* replanned leg — dashed magenta: still a plan, but now the active one */
+  if (sc.replanned_waypoints && sc.replanned_waypoints.length){
+    const rp = sc.replanned_waypoints.map(w => P.to(w.lat, w.lon));
+    plannedG.appendChild(mk('polyline',{
+      points: rp.map(p=>p[0].toFixed(1)+','+p[1].toFixed(1)).join(' '),
+      fill:'none', stroke:'var(--active)', 'stroke-width':1.6, 'stroke-dasharray':'7 5',
+      'stroke-linejoin':'round', opacity:.75
+    }));
+  }
+  svg.appendChild(plannedG);
+
+  /* launch point */
+  const homeG = mk('g',{transform:`translate(${hx},${hy})`});
+  homeG.appendChild(mk('circle',{r:5.5, fill:'none', stroke:'var(--ink-2)', 'stroke-width':1.4}));
+  homeG.appendChild(mk('circle',{r:1.7, fill:'var(--ink-2)'}));
+  svg.appendChild(homeG);
+
+  /* flown track — solid magenta, drawn progressively */
+  const flownG = mk('g'); S.nodes.flown = flownG;
+  S.nodes.trackGlow = mk('polyline',{points:'', fill:'none', stroke:'var(--active)', 'stroke-width':6,
+    'stroke-linecap':'round','stroke-linejoin':'round', opacity:.16});
+  S.nodes.track = mk('polyline',{points:'', fill:'none', stroke:'var(--active)', 'stroke-width':2.1,
+    'stroke-linecap':'round','stroke-linejoin':'round'});
+  flownG.appendChild(S.nodes.trackGlow);
+  flownG.appendChild(S.nodes.track);
+  svg.appendChild(flownG);
+
+  /* replan trigger marker */
+  const trig = mk('g',{opacity:0}); S.nodes.trigger = trig;
+  const ring = mk('circle',{r:6, fill:'none', stroke:'var(--planned)', 'stroke-width':1.5});
+  ring.appendChild(mk('animate',{attributeName:'r', values:'6;19', dur:'1.9s', repeatCount:'indefinite'}));
+  ring.appendChild(mk('animate',{attributeName:'opacity', values:'.85;0', dur:'1.9s', repeatCount:'indefinite'}));
+  trig.appendChild(ring);
+  trig.appendChild(mk('circle',{r:4, fill:'var(--planned)'}));
+  const tl = mk('text',{y:-13, fill:'var(--planned)', 'font-size':9.5, 'text-anchor':'middle',
+    'font-family':'var(--mono)', 'letter-spacing':'.14em'});
+  tl.textContent='REPLAN'; trig.appendChild(tl);
+  svg.appendChild(trig);
+
+  /* own-ship */
+  const ship = mk('g'); S.nodes.ship = ship;
+  ship.appendChild(mk('circle',{r:10, fill:'var(--active)', opacity:.14}));
+  ship.appendChild(mk('path',{d:'M0 -7.5 L5 5.5 L0 3 L-5 5.5 Z', fill:'var(--ink)', stroke:'var(--map-bg)', 'stroke-width':.8}));
+  svg.appendChild(ship);
+
+  applyLayers();
+}
+
+function applyLayers(){
+  const n = S.nodes;
+  if (n.planned) n.planned.style.display = S.layers.planned ? '' : 'none';
+  if (n.flown)   n.flown.style.display   = S.layers.flown   ? '' : 'none';
+  if (n.zone)    n.zone.style.display    = S.layers.zone    ? '' : 'none';
+  if (n.rings)   n.rings.style.display   = S.layers.rings   ? '' : 'none';
+}
+
+/* ---- per-frame render --------------------------------------------------- */
+function render(){
+  const sc = S.sc, P = S.proj;
+  const cur = sampleAt(sc.series, S.t);
+  const [x,y] = P.to(cur.lat, cur.lon);
+
+  /* progressive track */
+  let d = '';
+  for (let i=0; i<=cur.idx; i++){
+    const p = sc.series[i];
+    const [px,py] = P.to(p.lat, p.lon);
+    d += px.toFixed(1)+','+py.toFixed(1)+' ';
+  }
+  d += x.toFixed(1)+','+y.toFixed(1);
+  S.nodes.track.setAttribute('points', d);
+  S.nodes.trackGlow.setAttribute('points', d);
+
+  /* heading from recent travel */
+  let hdg = 0;
+  const back = sc.series[Math.max(0, cur.idx-2)];
+  if (back){
+    const [bx,by] = P.to(back.lat, back.lon);
+    const dx = x-bx, dy = y-by;
+    if (Math.hypot(dx,dy) > .6) hdg = Math.atan2(dx, -dy) * 180/Math.PI;
+  }
+  S.nodes.ship.setAttribute('transform', `translate(${x.toFixed(1)},${y.toFixed(1)}) rotate(${hdg.toFixed(1)})`);
+
+  /* trigger */
+  const tt = sc.t_replan_trigger;
+  if (tt != null){
+    const tp = sampleAt(sc.series, tt);
+    const [tx,ty] = P.to(tp.lat, tp.lon);
+    S.nodes.trigger.setAttribute('transform', `translate(${tx.toFixed(1)},${ty.toFixed(1)})`);
+    S.nodes.trigger.setAttribute('opacity', S.t >= tt ? 1 : 0);
   }
 
-  // telemetry strip
-  document.getElementById('telAlt').textContent = pt.alt.toFixed(1) + ' m';
-  const modeEl = document.getElementById('telMode');
-  modeEl.textContent = pt.mode || '—';
-  modeEl.className = 'value' + (pt.mode ? ' mode-'+pt.mode : '');
-  document.getElementById('telTime').textContent = playT.toFixed(1) + ' s';
-  document.getElementById('telStatus').textContent = statusForTime(sc, playT);
+  /* readouts */
+  S.nodes.roAlt.textContent = cur.alt.toFixed(1) + ' m';
+  S.nodes.roMode.textContent = cur.mode || '—';
+  S.nodes.roMode.setAttribute('data-mode', cur.mode || '');
+  S.nodes.roTime.textContent = S.t.toFixed(1) + ' s';
+  const replanning = tt != null && S.t >= tt;
+  S.nodes.roState.textContent = replanning ? 'Replanned' : 'Nominal';
+  S.nodes.roState.setAttribute('data-state', replanning ? 'replanning' : 'nominal');
 
-  document.getElementById('timeRead').textContent = `${playT.toFixed(1)}s / ${maxT.toFixed(1)}s`;
-  document.getElementById('scrub').value = Math.round((playT/maxT)*1000);
+  /* transport */
+  const pct = S.maxT ? (S.t/S.maxT)*100 : 0;
+  S.nodes.scrubFill.style.width = pct + '%';
+  S.nodes.scrubThumb.style.left = pct + '%';
+  S.nodes.tpTime.textContent = S.t.toFixed(1) + ' / ' + S.maxT.toFixed(1) + ' s';
+  S.nodes.scrub.setAttribute('aria-valuenow', S.t.toFixed(1));
 
-  updateEventLog(sc, playT);
+  paintTimeline();
 }
 
-function statusForTime(sc, t){
-  if (sc.t_replan_trigger == null) return 'Nominal';
-  if (t < sc.t_replan_trigger) return 'Nominal';
-  return 'Replanning';
-}
-
-/* ---------------------------------------------------------------------- */
-/* event log                                                               */
-/* ---------------------------------------------------------------------- */
+/* ---- timeline ----------------------------------------------------------- */
 function buildEvents(sc){
-  const events = [{ t:0, text:'Mission uploaded — climbing to cruise altitude', trigger:false }];
+  const ev = [{t:0, kind:'start', text:'Mission uploaded, climbing to cruise altitude'}];
+  const tt = sc.t_replan_trigger;
   if (sc.scenario === 'no_fly_zone'){
-    events.push({ t: sc.t_replan_trigger, text:`No-fly zone announced — engine reroutes around it (<b>${sc.event_outcome}</b>)`, trigger:true });
-    if (sc.t_to_mission_end_s != null) events.push({ t: sc.t_replan_trigger + sc.t_to_mission_end_s, text:'Coverage sweep completed via detour', trigger:false });
+    ev.push({t:tt, kind:'trigger', text:'Restricted zone announced &mdash; route replanned around it'});
+    ev.push({t:sc.series[sc.series.length-1].t, kind:'end', text:'Survey completed by way of the detour'});
   } else if (sc.scenario === 'battery_critical'){
-    events.push({ t: sc.t_replan_trigger, text:`Battery critical: <b>${sc.detected_percent}%</b> remaining — <b>${sc.event_outcome}</b> commanded`, trigger:true });
-    if (sc.t_to_safe_recovery_s != null) events.push({ t: sc.t_replan_trigger + sc.t_to_safe_recovery_s, text:'Vehicle confirmed safe — disarmed', trigger:false });
-  } else if (sc.scenario === 'gps_degraded'){
-    events.push({ t: sc.t_replan_trigger, text:`GPS fix lost (<b>${sc.detected_fix_type}</b>) — <b>${sc.event_outcome}</b> commanded`, trigger:true });
-    if (sc.t_to_safe_recovery_s != null) events.push({ t: sc.t_replan_trigger + sc.t_to_safe_recovery_s, text:'Vehicle confirmed stopped and holding', trigger:false });
+    ev.push({t:tt, kind:'trigger', text:`Battery critical at <strong>${sc.detected_percent}%</strong> &mdash; return to launch commanded`});
+    if (sc.t_to_safe_recovery_s != null) ev.push({t:tt + sc.t_to_safe_recovery_s, kind:'end', text:'Touched down and disarmed &mdash; safe state confirmed'});
+  } else {
+    ev.push({t:tt, kind:'trigger', text:`GPS fix lost (<strong>${sc.detected_fix_type}</strong>) &mdash; holding position`});
+    if (sc.t_to_safe_recovery_s != null) ev.push({t:tt + sc.t_to_safe_recovery_s, kind:'end', text:'Stopped and holding &mdash; safe state confirmed'});
   }
-  return events;
+  return ev.filter(e => e.t != null);
 }
 
-function updateEventLog(sc, t){
-  const log = document.getElementById('eventLog');
-  const events = sc.__events;
-  let activeIdx = 0;
-  events.forEach((e,i) => { if (t >= e.t) activeIdx = i; });
-  [...log.children].forEach((child, i) => {
-    child.classList.toggle('active', i === activeIdx);
-    child.classList.toggle('past', i < activeIdx);
+function renderTimeline(){
+  const host = S.nodes.timeline;
+  host.textContent = '';
+  S.sc.__events.forEach((e, i, arr) => {
+    const item = document.createElement('div');
+    item.className = 'tl-item';
+    item.setAttribute('data-kind', e.kind);
+    item.innerHTML =
+      `<div class="tl-time">${e.t.toFixed(1)}s</div>` +
+      `<div class="tl-rail"><span class="tl-node"></span>${i < arr.length-1 ? '<span class="tl-line"></span>' : ''}</div>` +
+      `<div class="tl-text">${e.text}</div>`;
+    host.appendChild(item);
+  });
+  paintTimeline();
+}
+
+function paintTimeline(){
+  const ev = S.sc.__events, host = S.nodes.timeline;
+  let cur = -1;
+  ev.forEach((e,i) => { if (S.t >= e.t) cur = i; });
+  Array.prototype.forEach.call(host.children, (el, i) => {
+    el.setAttribute('data-state', i === cur ? 'current' : (i < cur ? 'reached' : 'pending'));
   });
 }
 
-function renderEventLog(sc){
-  const log = document.getElementById('eventLog');
-  log.innerHTML = '';
-  sc.__events.forEach((e, i) => {
-    const row = document.createElement('div');
-    row.className = 'event' + (e.trigger ? ' trigger' : '');
-    row.innerHTML = `
-      <div class="event-time">${e.t.toFixed(1)}s</div>
-      <div class="event-dot-col"><div class="event-dot"></div>${i < sc.__events.length-1 ? '<div class="event-line"></div>' : ''}</div>
-      <div class="event-text">${e.text}</div>`;
-    log.appendChild(row);
-  });
+/* ---- transport ---------------------------------------------------------- */
+function setPlaying(on){
+  S.playing = on;
+  S.nodes.playIcon.innerHTML = on
+    ? '<path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/>'
+    : '<path d="M8 5v14l11-7z"/>';
+  S.nodes.playBtn.setAttribute('aria-label', on ? 'Pause' : 'Play');
+  if (on){
+    if (S.t >= S.maxT) S.t = 0;
+    S.last = null;
+    S.raf = requestAnimationFrame(step);
+  } else if (S.raf){
+    cancelAnimationFrame(S.raf); S.raf = null;
+  }
+}
+function step(ts){
+  if (!S.playing) return;
+  if (S.last == null) S.last = ts;
+  S.t = Math.min(S.maxT, S.t + ((ts - S.last)/1000) * S.speed);
+  S.last = ts;
+  render();
+  if (S.t >= S.maxT){ setPlaying(false); return; }
+  S.raf = requestAnimationFrame(step);
+}
+function seekFromPointer(clientX){
+  const r = S.nodes.scrub.getBoundingClientRect();
+  const f = Math.min(1, Math.max(0, (clientX - r.left) / r.width));
+  S.t = f * S.maxT;
+  render();
 }
 
-/* ---------------------------------------------------------------------- */
-/* stat cards + legend                                                    */
-/* ---------------------------------------------------------------------- */
-function num(str){ const m = /(-?\d+(\.\d+)?)/.exec(str||''); return m ? parseFloat(m[1]) : null; }
+/* ---- comparison matrix -------------------------------------------------- */
+const CMP_ROWS = [
+  ['No-fly zone (coverage sweep)', 'no-fly-zone (coverage mission)'],
+  ['Battery critical (moderate)',  'battery-critical (moderate, 12%)'],
+  ['Battery critical (severe)',    'battery-critical (severe, ~5%)'],
+  ['GPS degraded',                 'gps-degradation'],
+];
+function firstNum(s){ const m = /(-?\d+(?:\.\d+)?)/.exec(s||''); return m ? parseFloat(m[1]) : null; }
+function clean(s){ return (s||'').split(' (')[0].trim(); }
 
-function renderStats(sc){
-  const grp = document.getElementById('statGroup');
-  grp.innerHTML = '';
+function renderMatrix(){
+  const body = document.getElementById('cmpBody');
+  body.textContent = '';
+  CMP_ROWS.forEach(([label, key]) => {
+    const g = DATA.comparison[key];
+    if (!g) return;
+    ['adaptive','baseline'].forEach((cond, ci) => {
+      const d = g[cond];
+      const tr = document.createElement('tr');
+      const comp = clean(d.completion), rec = clean(d.recovery_time);
+      const compN = firstNum(comp), recN = firstNum(rec);
+      const safeM = /(\d+)\s*\/\s*(\d+)/.exec(d.safe_rate);
+      const safeN = safeM ? parseInt(safeM[1],10) : null;
+      const safeD = safeM ? parseInt(safeM[2],10) : 5;
 
-  function compareBlock(title, compKey){
-    const c = DATA.comparison[compKey];
-    if (!c) return;
-    const wrap = document.createElement('div');
-    wrap.className = 'fade-in';
-    wrap.innerHTML = `<div class="stat-group-title">${title}</div>`;
-    const row = document.createElement('div');
-    row.className = 'compare-row';
-    ['adaptive','baseline'].forEach(cond => {
-      const d = c[cond];
-      const card = document.createElement('div');
-      card.className = 'compare-card ' + cond;
-      card.innerHTML = `
-        <div class="tag">${cond}</div>
-        <div class="compare-metric"><div class="k">Completion</div><div class="v">${d.completion.split(' (')[0]}%</div></div>
-        <div class="compare-metric"><div class="k">Recovery time</div><div class="v">${d.recovery_time.split(' (')[0]}${/n\/a/.test(d.recovery_time)?'':'s'}</div></div>
-        <div class="compare-metric"><div class="k">Safe-confirmed</div><div class="v">${d.safe_rate}</div></div>`;
-      row.appendChild(card);
+      tr.innerHTML =
+        `<td class="cmp-scenario">${ci === 0 ? label : ''}</td>` +
+        `<td><span class="cmp-cond" data-c="${cond}">${cond}</span></td>` +
+        `<td><div class="cmp-bar"><span class="cmp-num">${compN==null?'—':comp+'%'}</span>` +
+          `<span class="cmp-bar-track"><span class="cmp-bar-fill" data-c="${cond}" data-w="${compN==null?0:compN}"></span></span></div></td>` +
+        `<td><span class="cmp-num">${recN==null?'—':rec+'s'}</span></td>` +
+        `<td><div class="cmp-bar"><span class="cmp-num">${d.safe_rate}</span>` +
+          `<span class="cmp-bar-track"><span class="cmp-bar-fill" data-c="${cond}" data-w="${safeN==null?0:(safeN/safeD)*100}"></span></span></div></td>`;
+      body.appendChild(tr);
     });
-    wrap.appendChild(row);
-    grp.appendChild(wrap);
-  }
-
-  if (sc.scenario === 'no_fly_zone'){
-    compareBlock('No-Fly Zone — Coverage Mission', 'no-fly-zone (coverage mission)');
-    const pill = document.createElement('div');
-    pill.className = 'headline-pill fade-in';
-    pill.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="9"/></svg>
-      <span>Adaptive completes <b>83.3%</b> of the mission vs. baseline's <b>50.0%</b> — zone never entered in either condition.</span>`;
-    grp.appendChild(pill);
-  } else if (sc.scenario === 'battery_critical'){
-    compareBlock('Battery — Moderate (12%)', 'battery-critical (moderate, 12%)');
-    compareBlock('Battery — Severe (~5%)', 'battery-critical (severe, ~5%)');
-    const pill = document.createElement('div');
-    pill.className = 'headline-pill fade-in';
-    pill.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2 7 13h5l-1 9 8-13h-6l2-7z"/></svg>
-      <span>Under a severe drain, adaptive lands in <b>19.8s</b> vs. baseline's full RTL at <b>51.3s</b> — <b>2.6&times; faster</b>.</span>`;
-    grp.appendChild(pill);
-  } else if (sc.scenario === 'gps_degraded'){
-    compareBlock('GPS Degradation', 'gps-degradation');
-    const pill = document.createElement('div');
-    pill.className = 'headline-pill fade-in';
-    pill.style.background = 'linear-gradient(135deg, rgba(255,97,97,.13), rgba(255,97,97,.04))';
-    pill.style.borderColor = 'rgba(255,97,97,.28)';
-    pill.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="#ff6161" stroke-width="2"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
-      <span style="color:#ffb3b3"><b style="color:#ff8a8a">Baseline fails outright here:</b> RTL is accepted by PX4 but overridden to LAND by its own failsafe within ~5s — <b style="color:#ff8a8a">0 of 5</b> baseline trials safely returned.</span>`;
-    grp.appendChild(pill);
-  }
-}
-
-function renderLegend(sc){
-  const legend = document.getElementById('legend');
-  const items = [
-    { swatch:'dashed', color:'var(--amber)', label:'Planned mission path' },
-    { swatch:'solid', color:'var(--cyan)', label:'Actual flown path (adaptive)' },
-  ];
-  if (sc.replanned_waypoints && sc.replanned_waypoints.length) items.push({ swatch:'solid', color:'var(--violet)', label:'Replanned detour' });
-  if (sc.zone_boundary && sc.zone_boundary.length) items.push({ swatch:'dot', color:'var(--red)', label:'No-fly zone' });
-  items.push({ swatch:'dot', color:'var(--amber)', label:'Replan trigger' });
-  legend.innerHTML = items.map(it => `
-    <div class="legend-item">
-      ${it.swatch === 'dot'
-        ? `<div class="legend-dot" style="background:${it.color}"></div>`
-        : `<div class="legend-swatch ${it.swatch==='dashed'?'dashed':''}" style="${it.swatch==='dashed'?`color:${it.color}`:`background:${it.color}`}"></div>`}
-      <span>${it.label}</span>
-    </div>`).join('');
-}
-
-/* ---------------------------------------------------------------------- */
-/* overview bars (bottom, all scenarios)                                  */
-/* ---------------------------------------------------------------------- */
-function renderOverview(){
-  const wrap = document.getElementById('overviewBars');
-  wrap.innerHTML = '';
-
-  function block(title, sub, compKey, metricFn, unit, maxVal){
-    const c = DATA.comparison[compKey];
-    const a = metricFn(c.adaptive), b = metricFn(c.baseline);
-    const div = document.createElement('div');
-    div.className = 'bar-block';
-    div.innerHTML = `
-      <div class="bar-title">${title}</div>
-      <div class="bar-sub">${sub}</div>
-      <div class="bar-line">
-        <div class="bl-label">Adaptive</div>
-        <div class="bl-track"><div class="bl-fill adaptive" data-w="${(a==null?0:Math.min(100,(a/maxVal)*100))}"></div></div>
-        <div class="bl-val">${a==null?'—':a+unit}</div>
-      </div>
-      <div class="bar-line">
-        <div class="bl-label">Baseline</div>
-        <div class="bl-track"><div class="bl-fill baseline" data-w="${(b==null?0:Math.min(100,(b/maxVal)*100))}"></div></div>
-        <div class="bl-val">${b==null?'—':b+unit}</div>
-      </div>`;
-    wrap.appendChild(div);
-  }
-
-  block('Mission Completion', 'No-fly-zone coverage mission', 'no-fly-zone (coverage mission)', d => num(d.completion), '%', 100);
-  block('Recovery Speed', 'Battery critical, severe (~5%)', 'battery-critical (severe, ~5%)', d => num(d.recovery_time), 's', 60);
-  block('Safe Recovery Rate', 'GPS degradation (of 5 trials)', 'gps-degradation', d => { const m = /(\d)\/(\d)/.exec(d.safe_rate); return m ? parseInt(m[1]) : null; }, '/5', 5);
-
+  });
   requestAnimationFrame(() => {
     setTimeout(() => {
-      wrap.querySelectorAll('.bl-fill').forEach(f => { f.style.width = f.dataset.w + '%'; });
-    }, 60);
+      body.querySelectorAll('.cmp-bar-fill').forEach(f => { f.style.width = Math.min(100, parseFloat(f.dataset.w)) + '%'; });
+    }, 40);
   });
 }
 
-/* ---------------------------------------------------------------------- */
-/* playback loop                                                          */
-/* ---------------------------------------------------------------------- */
-function tick(ts){
-  if (!playing){ lastFrameTs = null; return; }
-  if (lastFrameTs == null) lastFrameTs = ts;
-  const dt = (ts - lastFrameTs)/1000;
-  lastFrameTs = ts;
-  playT = Math.min(maxT, playT + dt*speedMult);
-  updateFrame();
-  if (playT >= maxT){ playing = false; setPlayIcon(false); return; }
-  rafId = requestAnimationFrame(tick);
-}
-
-function setPlayIcon(isPlaying){
-  const icon = document.getElementById('playIcon');
-  icon.innerHTML = isPlaying
-    ? '<path d="M7 5h4v14H7zM13 5h4v14h-4z"/>'
-    : '<path d="M8 5v14l11-7z"/>';
-}
-
-document.getElementById('playBtn').addEventListener('click', () => {
-  playing = !playing;
-  setPlayIcon(playing);
-  if (playing){
-    if (playT >= maxT) playT = 0;
-    lastFrameTs = null;
-    rafId = requestAnimationFrame(tick);
-  }
-});
-
-document.getElementById('scrub').addEventListener('input', (e) => {
-  playing = false; setPlayIcon(false);
-  playT = (e.target.value/1000) * maxT;
-  updateFrame();
-});
-
-const speedRow = document.getElementById('speedRow');
-[2,4,8,16].forEach(mult => {
-  const b = document.createElement('button');
-  b.className = 'speed-btn' + (mult===speedMult?' active':'');
-  b.textContent = mult+'×';
-  b.addEventListener('click', () => {
-    speedMult = mult;
-    [...speedRow.children].forEach(c=>c.classList.remove('active'));
-    b.classList.add('active');
-  });
-  speedRow.appendChild(b);
-});
-
-/* ---------------------------------------------------------------------- */
-/* scenario selection                                                     */
-/* ---------------------------------------------------------------------- */
-function selectScenario(key){
-  playing = false; setPlayIcon(false); playT = 0;
+/* ---- scenario switching -------------------------------------------------- */
+function select(key){
   const meta = SCENARIOS.find(s => s.key === key);
-  current = DATA.scenarios[key];
-  current.__events = buildEvents(current);
-  maxT = current.series[current.series.length-1].t;
+  S.key = key; S.meta = meta;
+  S.sc = DATA.scenarios[key];
+  S.sc.__events = buildEvents(S.sc);
+  S.proj = buildProjection(S.sc);
+  S.maxT = S.sc.series[S.sc.series.length-1].t;
+  S.t = 0;
+  setPlaying(false);
 
-  document.getElementById('scenarioTitle').textContent = meta.label;
-  document.getElementById('scenarioMeta').textContent = `${current.series.length} telemetry samples · ${maxT.toFixed(0)}s flight`;
-  document.getElementById('scenarioBlurb').innerHTML = meta.blurb;
+  document.getElementById('mapTitle').innerHTML = meta.mapTitle;
+  document.getElementById('mapNote').textContent =
+    `${S.sc.series.length} samples · ${S.maxT.toFixed(0)}s`;
+  document.getElementById('brief').innerHTML = meta.brief;
 
-  [...tabsEl.querySelectorAll('.tab')].forEach(t => {
-    const active = t.dataset.key === key;
-    t.classList.toggle('active', active);
-    if (active) positionIndicator(t);
+  const h = meta.headline;
+  document.getElementById('verdictEyebrow').textContent = h.eyebrow;
+  document.getElementById('verdictMetric').textContent = h.metric;
+  document.getElementById('verdictFoot').textContent = h.foot;
+  document.getElementById('figAdaptive').textContent = h.adaptive;
+  document.getElementById('figBaseline').textContent = h.baseline;
+  document.getElementById('verdictDelta').textContent = h.delta;
+
+  S.nodes.scrub.setAttribute('aria-valuemax', S.maxT.toFixed(1));
+  const tt = S.sc.t_replan_trigger;
+  S.nodes.scrubTick.style.display = tt == null ? 'none' : '';
+  if (tt != null) S.nodes.scrubTick.style.left = ((tt/S.maxT)*100) + '%';
+
+  Array.prototype.forEach.call(document.querySelectorAll('.sel-btn'), b => {
+    const on = b.dataset.key === key;
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+    if (on) placeIndicator(b);
   });
 
-  drawScenario(current);
-  renderLegend(current);
-  renderEventLog(current);
-  renderStats(current);
-  updateFrame();
+  drawChart();
+  renderTimeline();
+  render();
+}
+function placeIndicator(btn){
+  const host = document.getElementById('selector');
+  const ind = document.getElementById('selIndicator');
+  ind.style.left = (btn.offsetLeft) + 'px';
+  ind.style.width = (btn.offsetWidth) + 'px';
 }
 
-renderOverview();
-window.addEventListener('resize', () => {
-  const activeTab = tabsEl.querySelector('.tab.active');
-  if (activeTab) positionIndicator(activeTab);
-});
-selectScenario('no_fly_zone');
+/* ---- boot ---------------------------------------------------------------- */
+(function init(){
+  S.nodes = {
+    chart: document.getElementById('chart'),
+    timeline: document.getElementById('timeline'),
+    playBtn: document.getElementById('playBtn'),
+    playIcon: document.getElementById('playIcon'),
+    scrub: document.getElementById('scrub'),
+    scrubFill: document.getElementById('scrubFill'),
+    scrubThumb: document.getElementById('scrubThumb'),
+    scrubTick: document.getElementById('scrubTick'),
+    tpTime: document.getElementById('tpTime'),
+    roAlt: document.getElementById('roAlt'),
+    roMode: document.getElementById('roMode'),
+    roTime: document.getElementById('roTime'),
+    roState: document.getElementById('roState'),
+  };
+
+  /* scenario tabs */
+  const sel = document.getElementById('selector');
+  SCENARIOS.forEach(s => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'sel-btn'; b.dataset.key = s.key;
+    b.setAttribute('role','tab'); b.setAttribute('aria-selected','false');
+    b.textContent = s.label;
+    b.addEventListener('click', () => select(s.key));
+    sel.appendChild(b);
+  });
+
+  /* speeds */
+  const speeds = document.getElementById('tpSpeeds');
+  SPEEDS.forEach(m => {
+    const b = document.createElement('button');
+    b.type='button'; b.className='tp-speed'; b.textContent = m + '×';
+    b.setAttribute('aria-pressed', m === S.speed ? 'true' : 'false');
+    b.addEventListener('click', () => {
+      S.speed = m;
+      speeds.querySelectorAll('.tp-speed').forEach(o => o.setAttribute('aria-pressed', o === b ? 'true' : 'false'));
+    });
+    speeds.appendChild(b);
+  });
+
+  S.nodes.playBtn.addEventListener('click', () => setPlaying(!S.playing));
+
+  /* scrubbing */
+  let dragging = false;
+  const scrub = S.nodes.scrub;
+  scrub.addEventListener('pointerdown', e => {
+    dragging = true; scrub.setPointerCapture(e.pointerId);
+    setPlaying(false); seekFromPointer(e.clientX);
+  });
+  scrub.addEventListener('pointermove', e => { if (dragging) seekFromPointer(e.clientX); });
+  scrub.addEventListener('pointerup', e => { dragging = false; scrub.releasePointerCapture(e.pointerId); });
+  scrub.addEventListener('pointercancel', () => { dragging = false; });
+  scrub.addEventListener('keydown', e => {
+    const stepS = e.shiftKey ? 10 : 1;
+    if (e.key === 'ArrowRight'){ setPlaying(false); S.t = Math.min(S.maxT, S.t + stepS); render(); e.preventDefault(); }
+    if (e.key === 'ArrowLeft'){ setPlaying(false); S.t = Math.max(0, S.t - stepS); render(); e.preventDefault(); }
+    if (e.key === 'Home'){ setPlaying(false); S.t = 0; render(); e.preventDefault(); }
+    if (e.key === 'End'){ setPlaying(false); S.t = S.maxT; render(); e.preventDefault(); }
+    if (e.key === ' '){ setPlaying(!S.playing); e.preventDefault(); }
+  });
+
+  /* layer toggles */
+  document.querySelectorAll('.layer').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const k = btn.dataset.layer;
+      S.layers[k] = !S.layers[k];
+      btn.setAttribute('aria-pressed', S.layers[k] ? 'true' : 'false');
+      applyLayers();
+    });
+  });
+
+  /* day / night */
+  const night = document.getElementById('modeNight'), day = document.getElementById('modeDay');
+  function setMode(m){
+    document.documentElement.setAttribute('data-theme', m);
+    night.setAttribute('aria-pressed', m === 'dark' ? 'true' : 'false');
+    day.setAttribute('aria-pressed', m === 'light' ? 'true' : 'false');
+  }
+  night.addEventListener('click', () => setMode('dark'));
+  day.addEventListener('click', () => setMode('light'));
+  setMode(window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+
+  window.addEventListener('resize', () => {
+    const on = document.querySelector('.sel-btn[aria-selected="true"]');
+    if (on) placeIndicator(on);
+  });
+
+  renderMatrix();
+  select('no_fly_zone');
+})();
 </script>
 </body>
 </html>
